@@ -351,8 +351,7 @@ function renderResultHeatmap(rows) {
 }
 
 function pitchNumberToAngle(pitchNumber) {
-  const normalized = (pitchNumber % PITCH_MAX) / PITCH_MAX;
-  return normalized * TWO_PI;
+  return (pitchNumber / PITCH_MAX) * TWO_PI;
 }
 
 function polarToCanvas(angle, radiusFraction, center, maxRadius) {
@@ -373,7 +372,7 @@ function buildSpiralPoints(pitchRows, center, maxRadius) {
     const progress = count === 1 ? 1 : index / (count - 1);
     const radiusFraction = SPIRAL_MIN_RADIUS
       + progress ** 0.65 * (SPIRAL_MAX_RADIUS - SPIRAL_MIN_RADIUS);
-    const angle = pitchNumberToAngle(entry.pitchNumber) + progress * TWO_PI * 0.95;
+    const angle = pitchNumberToAngle(entry.pitchNumber);
     const point = polarToCanvas(angle, radiusFraction, center, maxRadius);
 
     return {
@@ -504,7 +503,7 @@ function attachSpiralZoom(canvas, drawScene) {
 function renderPitchSpiral(pitcherRows, pitcherName) {
   const card = createChartCard(
     'Pitch spiral',
-    'Chronological pitch path spirals outward from pitch-number compass positions. Scroll over the chart to zoom.',
+    'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Newer pitches sit farther from the center. Scroll to zoom.',
   );
   card.classList.add('chart-card--wide', 'chart-card--spiral');
 

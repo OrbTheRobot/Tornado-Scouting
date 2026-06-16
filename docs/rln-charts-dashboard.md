@@ -65,7 +65,7 @@ Shows **all pitch history** for the selected pitcher.
 
 | Element | Behavior |
 | --- | --- |
-| Angular position | Based on `Pitch #` compass position, rotating further clockwise as pitches get more recent. |
+| Angular position | `pitch # × 360 ÷ 1000` degrees clockwise from top center (500 at bottom, 250 at right). |
 | Radial position | Oldest pitch near the center; each later pitch is placed farther out. |
 | Connectors | Outward-bulging cubic curves link each pitch to the chronologically previous pitch. |
 | Labels | Each point shows its pitch number; the most recent pitch is highlighted in green. |
