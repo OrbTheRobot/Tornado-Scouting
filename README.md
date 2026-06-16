@@ -34,6 +34,10 @@ Open `Tornado-Scouting.code-workspace` in Cursor to keep this project isolated f
 
 ## Customize charts
 
-Placeholder charts are in `app.js`. Replace or extend the chart builders when you define the final chart requirements.
+Chart renderers live in `app.js`:
 
-Configuration lives in `config.js`.
+1. **Last 10 pitches** — table sorted chronologically by `Play`
+2. **Result heatmap** — canvas heatmap with pitch # 1–1000 on the X axis
+3. **Chart 3** — placeholder
+
+Configuration lives in `config.js`. See `docs/rln-charts-dashboard.md` for full specs.

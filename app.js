@@ -1,12 +1,16 @@
 import { SHEET_CONFIG, getSheetCsvUrl } from './config.js';
 
+const PITCH_MIN = 1;
+const PITCH_MAX = 1000;
+const LAST_PITCH_COUNT = 10;
+const HEATMAP_ROW_HEIGHT = 22;
+
 const pitcherSelect = document.getElementById('pitcher-select');
 const statusEl = document.getElementById('status');
 const rowCountEl = document.getElementById('row-count');
 const chartGrid = document.getElementById('chart-grid');
 
 let allRows = [];
-const chartInstances = new Map();
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
@@ -93,11 +97,6 @@ function getUniquePitchers(rows) {
 function populatePitcherDropdown(pitchers) {
   pitcherSelect.replaceChildren();
 
-  const defaultOption = document.createElement('option');
-  defaultOption.value = '';
-  defaultOption.textContent = 'All pitchers';
-  pitcherSelect.appendChild(defaultOption);
-
   pitchers.forEach((pitcher) => {
     const option = document.createElement('option');
     option.value = pitcher;
@@ -107,191 +106,258 @@ function populatePitcherDropdown(pitchers) {
 }
 
 function filterRowsByPitcher(rows, pitcher) {
-  if (!pitcher) {
-    return rows;
-  }
-
   return rows.filter((row) => row[SHEET_CONFIG.filterColumn] === pitcher);
 }
 
-function destroyCharts() {
-  chartInstances.forEach((chart) => chart.destroy());
-  chartInstances.clear();
+function parsePitchNumber(row) {
+  const pitchNumber = Number.parseInt(row['Pitch #'], 10);
+  if (!Number.isFinite(pitchNumber)) {
+    return null;
+  }
+
+  if (pitchNumber < PITCH_MIN || pitchNumber > PITCH_MAX) {
+    return null;
+  }
+
+  return pitchNumber;
 }
 
-function renderPlaceholderCharts(rows, pitcher) {
-  destroyCharts();
-  chartGrid.replaceChildren();
+function parsePlayOrder(row) {
+  const playOrder = Number.parseInt(row.Play, 10);
+  if (!Number.isFinite(playOrder)) {
+    return null;
+  }
 
-  const chartDefinitions = [
-    {
-      id: 'chart-results',
-      title: 'Results breakdown',
-      description: 'Placeholder chart — define metrics in charts.js',
-      build: buildResultsChart,
-    },
-    {
-      id: 'chart-play-types',
-      title: 'Play types',
-      description: 'Placeholder chart — define metrics in charts.js',
-      build: buildPlayTypeChart,
-    },
-    {
-      id: 'chart-runs',
-      title: 'Runs allowed',
-      description: 'Placeholder chart — define metrics in charts.js',
-      build: buildRunsChart,
-    },
+  return playOrder;
+}
+
+function getPitchRows(rows) {
+  return rows
+    .map((row) => {
+      const pitchNumber = parsePitchNumber(row);
+      if (pitchNumber === null) {
+        return null;
+      }
+
+      return { row, pitchNumber };
+    })
+    .filter(Boolean);
+}
+
+function getChronologicalPitchRows(rows) {
+  return rows
+    .map((row) => {
+      const pitchNumber = parsePitchNumber(row);
+      const playOrder = parsePlayOrder(row);
+      if (pitchNumber === null || playOrder === null) {
+        return null;
+      }
+
+      return { row, pitchNumber, playOrder };
+    })
+    .filter(Boolean);
+}
+
+function createChartCard(title, description) {
+  const card = document.createElement('article');
+  card.className = 'chart-card';
+
+  const heading = document.createElement('h2');
+  heading.textContent = title;
+
+  const caption = document.createElement('p');
+  caption.className = 'chart-caption';
+  caption.textContent = description;
+
+  card.append(heading, caption);
+  return card;
+}
+
+function renderLastTenPitchesTable(rows) {
+  const card = createChartCard(
+    'Last 10 pitches',
+    'Most recent pitches first, in chronological order.',
+  );
+  card.classList.add('chart-card--table');
+
+  const pitchRows = getChronologicalPitchRows(rows)
+    .sort((a, b) => b.playOrder - a.playOrder)
+    .slice(0, LAST_PITCH_COUNT);
+
+  if (pitchRows.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty-state';
+    empty.textContent = 'No pitch data for this pitcher.';
+    card.appendChild(empty);
+    return card;
+  }
+
+  const table = document.createElement('table');
+  table.className = 'pitch-table';
+
+  const columns = [
+    { key: 'Pitch #', label: 'Pitch #' },
+    { key: 'Result', label: 'Result' },
+    { key: 'Batter', label: 'Batter' },
+    { key: 'Inning', label: 'Inning' },
   ];
 
-  chartDefinitions.forEach((definition) => {
-    const card = document.createElement('article');
-    card.className = 'chart-card';
-
-    const heading = document.createElement('h2');
-    heading.textContent = definition.title;
-
-    const caption = document.createElement('p');
-    caption.className = 'chart-caption';
-    caption.textContent = definition.description;
-
-    const canvas = document.createElement('canvas');
-    canvas.id = definition.id;
-
-    card.append(heading, caption, canvas);
-    chartGrid.appendChild(card);
-
-    const chart = definition.build(canvas, rows, pitcher);
-    if (chart) {
-      chartInstances.set(definition.id, chart);
-    }
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  columns.forEach(({ label }) => {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.textContent = label;
+    headerRow.appendChild(th);
   });
+  thead.appendChild(headerRow);
+
+  const tbody = document.createElement('tbody');
+  pitchRows.forEach(({ row }) => {
+    const tr = document.createElement('tr');
+    columns.forEach(({ key }) => {
+      const td = document.createElement('td');
+      td.textContent = row[key]?.trim() || '—';
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+
+  table.append(thead, tbody);
+  card.appendChild(table);
+  return card;
 }
 
-function countByField(rows, field) {
+function getResultRows(rows) {
   const counts = new Map();
 
   rows.forEach((row) => {
-    const value = row[field]?.trim() || 'Unknown';
-    counts.set(value, (counts.get(value) ?? 0) + 1);
+    const result = row.Result?.trim() || 'Unknown';
+    counts.set(result, (counts.get(result) ?? 0) + 1);
   });
 
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([result]) => result);
 }
 
-function buildResultsChart(canvas, rows) {
-  const data = countByField(rows, 'Result').slice(0, 8);
-  if (data.length === 0) {
-    return null;
+function renderResultHeatmap(rows) {
+  const card = createChartCard(
+    'Result heatmap',
+    'Each row is a result type. The horizontal axis is pitch number from 1 to 1000.',
+  );
+  card.classList.add('chart-card--wide');
+
+  const pitchRows = getPitchRows(rows);
+  const results = getResultRows(pitchRows.map(({ row }) => row));
+
+  if (pitchRows.length === 0 || results.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty-state';
+    empty.textContent = 'No pitch data for this pitcher.';
+    card.appendChild(empty);
+    return card;
   }
 
-  return new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels: data.map(([label]) => label),
-      datasets: [
-        {
-          label: 'Plays',
-          data: data.map(([, count]) => count),
-          backgroundColor: '#4f8cff',
-          borderRadius: 6,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: { precision: 0 },
-        },
-      },
-    },
+  const resultIndex = new Map(results.map((result, index) => [result, index]));
+
+  const heatmap = document.createElement('div');
+  heatmap.className = 'heatmap';
+  heatmap.style.setProperty('--heatmap-rows', String(results.length));
+
+  const labels = document.createElement('div');
+  labels.className = 'heatmap-labels';
+
+  results.forEach((result) => {
+    const label = document.createElement('span');
+    label.className = 'heatmap-label';
+    label.textContent = result;
+    labels.appendChild(label);
   });
+
+  const canvasWrap = document.createElement('div');
+  canvasWrap.className = 'heatmap-canvas-wrap';
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'heatmap-canvas';
+  canvas.width = PITCH_MAX;
+  canvas.height = results.length * HEATMAP_ROW_HEIGHT;
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute(
+    'aria-label',
+    `Pitch result heatmap with ${results.length} result rows across pitch numbers ${PITCH_MIN} to ${PITCH_MAX}.`,
+  );
+
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#121820';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  pitchRows.forEach(({ row, pitchNumber }) => {
+    const result = row.Result?.trim() || 'Unknown';
+    const rowIndex = resultIndex.get(result);
+    if (rowIndex === undefined) {
+      return;
+    }
+
+    const x = pitchNumber - 1;
+    const y = rowIndex * HEATMAP_ROW_HEIGHT;
+
+    context.fillStyle = '#4f8cff';
+    context.fillRect(x, y + 1, 1, HEATMAP_ROW_HEIGHT - 2);
+  });
+
+  canvasWrap.appendChild(canvas);
+
+  const axis = document.createElement('div');
+  axis.className = 'heatmap-axis';
+  axis.innerHTML = `
+    <span>${PITCH_MIN}</span>
+    <span>250</span>
+    <span>500</span>
+    <span>750</span>
+    <span>${PITCH_MAX}</span>
+  `;
+
+  heatmap.append(labels, canvasWrap, axis);
+  card.appendChild(heatmap);
+  return card;
 }
 
-function buildPlayTypeChart(canvas, rows) {
-  const data = countByField(rows, 'PlayType');
-  if (data.length === 0) {
-    return null;
-  }
+function renderChartThreePlaceholder() {
+  const card = createChartCard(
+    'Chart 3',
+    'Custom chart — specification pending.',
+  );
+  card.classList.add('chart-card--placeholder');
 
-  return new Chart(canvas, {
-    type: 'doughnut',
-    data: {
-      labels: data.map(([label]) => label),
-      datasets: [
-        {
-          data: data.map(([, count]) => count),
-          backgroundColor: ['#4f8cff', '#7c5cff', '#35bfa5', '#f5a524', '#ef6b6b'],
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: 'bottom' },
-      },
-    },
-  });
+  const placeholder = document.createElement('p');
+  placeholder.className = 'empty-state';
+  placeholder.textContent = 'Coming soon.';
+  card.appendChild(placeholder);
+  return card;
 }
 
-function buildRunsChart(canvas, rows) {
-  const runsByGame = new Map();
+function renderDashboard(rows) {
+  chartGrid.replaceChildren();
 
-  rows.forEach((row) => {
-    const game = row.Game || 'Unknown';
-    const runs = Number.parseInt(row.Runs, 10) || 0;
-    runsByGame.set(game, (runsByGame.get(game) ?? 0) + runs);
-  });
-
-  const data = [...runsByGame.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  if (data.length === 0) {
-    return null;
-  }
-
-  return new Chart(canvas, {
-    type: 'line',
-    data: {
-      labels: data.map(([game]) => game),
-      datasets: [
-        {
-          label: 'Runs',
-          data: data.map(([, runs]) => runs),
-          borderColor: '#35bfa5',
-          backgroundColor: 'rgba(53, 191, 165, 0.15)',
-          fill: true,
-          tension: 0.25,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: { precision: 0 },
-        },
-      },
-    },
-  });
+  chartGrid.append(
+    renderLastTenPitchesTable(rows),
+    renderResultHeatmap(rows),
+    renderChartThreePlaceholder(),
+  );
 }
 
 function updateDashboard() {
   const selectedPitcher = pitcherSelect.value;
-  const filteredRows = filterRowsByPitcher(allRows, selectedPitcher);
+  if (!selectedPitcher) {
+    rowCountEl.textContent = '0 plays';
+    chartGrid.replaceChildren();
+    return;
+  }
 
+  const filteredRows = filterRowsByPitcher(allRows, selectedPitcher);
   rowCountEl.textContent = `${filteredRows.length.toLocaleString()} plays`;
-  renderPlaceholderCharts(filteredRows, selectedPitcher);
+  renderDashboard(filteredRows);
 }
 
 async function loadSheetData() {
@@ -309,8 +375,12 @@ async function loadSheetData() {
 
     const pitchers = getUniquePitchers(allRows);
     populatePitcherDropdown(pitchers);
-    updateDashboard();
 
+    if (pitchers.length > 0) {
+      pitcherSelect.value = pitchers[0];
+    }
+
+    updateDashboard();
     setStatus(`Loaded ${allRows.length.toLocaleString()} plays from ${SHEET_CONFIG.sheetName}`);
   } catch (error) {
     console.error(error);
