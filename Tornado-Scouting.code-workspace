@@ -1,0 +1,13 @@
+{
+  "folders": [
+    {
+      "name": "Tornado-Scouting",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/.git": true
+    }
+  }
+}

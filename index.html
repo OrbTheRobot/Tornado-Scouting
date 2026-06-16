@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tornado Scouting</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <h1>Tornado Scouting</h1>
+        <p>
+          Live dashboard from the public Google Sheet. Filter by pitcher to update the charts below.
+        </p>
+      </header>
+
+      <section class="controls">
+        <div class="control-group">
+          <label for="pitcher-select">Pitcher</label>
+          <select id="pitcher-select" aria-label="Filter by pitcher"></select>
+        </div>
+
+        <div class="meta">
+          <span class="pill" id="row-count">0 plays</span>
+          <span id="status">Initializing...</span>
+        </div>
+      </section>
+
+      <section class="chart-grid" id="chart-grid" aria-live="polite"></section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
