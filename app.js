@@ -4,6 +4,10 @@ const PITCH_MIN = 1;
 const PITCH_MAX = 1000;
 const LAST_PITCH_COUNT = 10;
 const HEATMAP_ROW_HEIGHT = 22;
+const SPIRAL_CANVAS_SIZE = 560;
+const SPIRAL_MIN_RADIUS = 0.1;
+const SPIRAL_MAX_RADIUS = 0.44;
+const TWO_PI = Math.PI * 2;
 
 const pitcherSelect = document.getElementById('pitcher-select');
 const statusEl = document.getElementById('status');
@@ -95,6 +99,7 @@ function getUniquePitchers(rows) {
 }
 
 function populatePitcherDropdown(pitchers) {
+  const previous = pitcherSelect.value;
   pitcherSelect.replaceChildren();
 
   pitchers.forEach((pitcher) => {
@@ -103,6 +108,12 @@ function populatePitcherDropdown(pitchers) {
     option.textContent = pitcher;
     pitcherSelect.appendChild(option);
   });
+
+  if (previous && pitchers.includes(previous)) {
+    pitcherSelect.value = previous;
+  } else if (pitchers.length > 0) {
+    pitcherSelect.value = pitchers[0];
+  }
 }
 
 function filterRowsByPitcher(rows, pitcher) {
@@ -323,27 +334,180 @@ function renderResultHeatmap(rows) {
   return card;
 }
 
-function renderChartThreePlaceholder() {
-  const card = createChartCard(
-    'Chart 3',
-    'Custom chart — specification pending.',
-  );
-  card.classList.add('chart-card--placeholder');
+function pitchNumberToAngle(pitchNumber) {
+  const normalized = (pitchNumber % PITCH_MAX) / PITCH_MAX;
+  return normalized * TWO_PI;
+}
 
-  const placeholder = document.createElement('p');
-  placeholder.className = 'empty-state';
-  placeholder.textContent = 'Coming soon.';
-  card.appendChild(placeholder);
+function interpolateAngleClockwise(fromAngle, toAngle, t) {
+  let delta = toAngle - fromAngle;
+  while (delta < 0) {
+    delta += TWO_PI;
+  }
+  while (delta > TWO_PI) {
+    delta -= TWO_PI;
+  }
+
+  return (fromAngle + delta * t) % TWO_PI;
+}
+
+function polarToCanvas(angle, radiusFraction, center, maxRadius) {
+  const radius = radiusFraction * maxRadius;
+  return {
+    x: center + Math.sin(angle) * radius,
+    y: center - Math.cos(angle) * radius,
+    angle,
+    radius: radiusFraction,
+  };
+}
+
+function buildSpiralPoints(pitchRows, center, maxRadius) {
+  const chronological = [...pitchRows].sort((a, b) => a.playOrder - b.playOrder);
+  const count = chronological.length;
+
+  return chronological.map((entry, index) => {
+    const radiusFraction = count === 1
+      ? SPIRAL_MAX_RADIUS
+      : SPIRAL_MIN_RADIUS
+        + (index / (count - 1)) * (SPIRAL_MAX_RADIUS - SPIRAL_MIN_RADIUS);
+    const angle = pitchNumberToAngle(entry.pitchNumber);
+    const point = polarToCanvas(angle, radiusFraction, center, maxRadius);
+
+    return {
+      ...point,
+      pitchNumber: entry.pitchNumber,
+      result: entry.row.Result?.trim() || 'Unknown',
+      playOrder: entry.playOrder,
+    };
+  });
+}
+
+function drawSpiralGuide(context, center, maxRadius) {
+  context.save();
+  context.strokeStyle = 'rgba(154, 167, 181, 0.18)';
+  context.lineWidth = 1;
+
+  [SPIRAL_MIN_RADIUS, SPIRAL_MAX_RADIUS].forEach((radiusFraction) => {
+    context.beginPath();
+    context.arc(center, center, radiusFraction * maxRadius, 0, TWO_PI);
+    context.stroke();
+  });
+
+  const labels = [
+    { pitch: 0, text: '0/1000' },
+    { pitch: 250, text: '250' },
+    { pitch: 500, text: '500' },
+    { pitch: 750, text: '750' },
+  ];
+
+  context.fillStyle = 'rgba(154, 167, 181, 0.85)';
+  context.font = '11px "Segoe UI", system-ui, sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+
+  labels.forEach(({ pitch, text }) => {
+    const angle = pitchNumberToAngle(pitch);
+    const labelRadius = (SPIRAL_MAX_RADIUS + 0.06) * maxRadius;
+    const x = center + Math.sin(angle) * labelRadius;
+    const y = center - Math.cos(angle) * labelRadius;
+    context.fillText(text, x, y);
+  });
+
+  context.restore();
+}
+
+function drawSpiralConnector(context, fromPoint, toPoint, center, maxRadius) {
+  const midAngle = interpolateAngleClockwise(fromPoint.angle, toPoint.angle, 0.5);
+  const midRadius = (fromPoint.radius + toPoint.radius) / 2;
+  const control = polarToCanvas(midAngle, midRadius, center, maxRadius);
+
+  context.beginPath();
+  context.moveTo(fromPoint.x, fromPoint.y);
+  context.quadraticCurveTo(control.x, control.y, toPoint.x, toPoint.y);
+  context.stroke();
+}
+
+function renderPitchSpiral(pitcherRows, pitcherName) {
+  const card = createChartCard(
+    'Pitch spiral',
+    'Full pitch history for the selected pitcher. Pitch number maps clockwise from 0/1000 at the top; newer pitches sit farther from the center.',
+  );
+  card.classList.add('chart-card--wide', 'chart-card--spiral');
+
+  const pitchRows = getChronologicalPitchRows(pitcherRows);
+
+  if (pitchRows.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty-state';
+    empty.textContent = pitcherName
+      ? `No pitch data for ${pitcherName}.`
+      : 'Select a pitcher to view pitch history.';
+    card.appendChild(empty);
+    return card;
+  }
+
+  const canvasWrap = document.createElement('div');
+  canvasWrap.className = 'spiral-canvas-wrap';
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'spiral-canvas';
+  canvas.width = SPIRAL_CANVAS_SIZE;
+  canvas.height = SPIRAL_CANVAS_SIZE;
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute(
+    'aria-label',
+    `Pitch spiral for ${pitcherName} with ${pitchRows.length} pitches.`,
+  );
+
+  const context = canvas.getContext('2d');
+  const center = SPIRAL_CANVAS_SIZE / 2;
+  const maxRadius = SPIRAL_CANVAS_SIZE * 0.42;
+  const points = buildSpiralPoints(pitchRows, center, maxRadius);
+
+  context.fillStyle = '#121820';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawSpiralGuide(context, center, maxRadius);
+
+  context.strokeStyle = 'rgba(79, 140, 255, 0.45)';
+  context.lineWidth = 2;
+  context.lineCap = 'round';
+
+  for (let index = 1; index < points.length; index += 1) {
+    drawSpiralConnector(context, points[index - 1], points[index], center, maxRadius);
+  }
+
+  points.forEach((point, index) => {
+    const isLatest = index === points.length - 1;
+    context.beginPath();
+    context.fillStyle = isLatest ? '#35bfa5' : '#4f8cff';
+    context.arc(point.x, point.y, isLatest ? 5 : 4, 0, TWO_PI);
+    context.fill();
+
+    if (isLatest) {
+      context.strokeStyle = 'rgba(232, 237, 242, 0.9)';
+      context.lineWidth = 1.5;
+      context.stroke();
+    }
+  });
+
+  canvasWrap.appendChild(canvas);
+
+  const legend = document.createElement('p');
+  legend.className = 'spiral-legend';
+  legend.textContent = `${pitchRows.length.toLocaleString()} pitches · oldest near center · newest highlighted`;
+
+  card.append(canvasWrap, legend);
   return card;
 }
 
-function renderDashboard(rows) {
+function renderDashboard(pitcherRows, pitcherName) {
   chartGrid.replaceChildren();
 
   chartGrid.append(
-    renderLastTenPitchesTable(rows),
-    renderResultHeatmap(rows),
-    renderChartThreePlaceholder(),
+    renderLastTenPitchesTable(pitcherRows),
+    renderResultHeatmap(pitcherRows),
+    renderPitchSpiral(pitcherRows, pitcherName),
   );
 }
 
@@ -357,7 +521,7 @@ function updateDashboard() {
 
   const filteredRows = filterRowsByPitcher(allRows, selectedPitcher);
   rowCountEl.textContent = `${filteredRows.length.toLocaleString()} plays`;
-  renderDashboard(filteredRows);
+  renderDashboard(filteredRows, selectedPitcher);
 }
 
 async function loadSheetData() {
@@ -376,7 +540,7 @@ async function loadSheetData() {
     const pitchers = getUniquePitchers(allRows);
     populatePitcherDropdown(pitchers);
 
-    if (pitchers.length > 0) {
+    if (pitchers.length > 0 && !pitcherSelect.value) {
       pitcherSelect.value = pitchers[0];
     }
 

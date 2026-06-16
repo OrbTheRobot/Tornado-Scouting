@@ -12,6 +12,7 @@ flowchart LR
     App --> Filter[Pitcher dropdown]
     Filter --> Table[Last 10 pitches table]
     Filter --> Heatmap[Result heatmap]
+    Filter --> Spiral[Pitch spiral]
 ```
 
 ## Data contract
@@ -24,7 +25,7 @@ flowchart LR
 | Pitch number field | `Pitch #` (sheet column J), scale 1–1000 |
 | Fetch URL | `https://docs.google.com/spreadsheets/d/{id}/gviz/tq?tqx=out:csv&sheet=Plays%20(Converted)` |
 
-The app maps CSV headers to row objects and filters rows where `Pitcher` equals the selected dropdown value. A pitcher must be selected; the first pitcher in the sheet is selected by default on load.
+The app maps CSV headers to row objects and filters rows where `Pitcher` equals the selected dropdown value. All three charts use the selected pitcher. The first pitcher in the sheet is selected by default on load.
 
 ## File map
 
@@ -33,7 +34,7 @@ The app maps CSV headers to row objects and filters rows where `Pitcher` equals 
 | `index.html` | Page shell and chart container |
 | `styles.css` | Layout, table, and heatmap theme |
 | `config.js` | Sheet ID, tab name, filter column |
-| `app.js` | CSV fetch/parse, filter logic, table and heatmap rendering |
+| `app.js` | CSV fetch/parse, filter logic, table, heatmap, and spiral rendering |
 
 ## Charts
 
@@ -58,9 +59,18 @@ Rows without a valid pitch number (1–1000) are excluded.
 
 Rendered on a 1000px-wide canvas mapped 1:1 to the pitch number scale. The `Diff` field is not used.
 
-### Chart 3
+### Chart 3 — Pitch spiral
 
-Placeholder for a custom chart — specification pending.
+Shows **all pitch history** for the selected pitcher.
+
+| Element | Behavior |
+| --- | --- |
+| Angular position | `Pitch #` mapped to a circle: 0/1000 at the top, increasing clockwise (500 at bottom). |
+| Radial position | Oldest pitch near the center; each later pitch is placed farther out. |
+| Connectors | Quadratic curves link each pitch to the chronologically previous pitch, with a control point interpolated between their polar positions. |
+| Highlight | The most recent pitch is drawn larger in green. |
+
+Guide labels appear at 0/1000, 250, 500, and 750 on the outer ring. Chronological order uses the `Play` field.
 
 ## Extending charts
 
@@ -80,7 +90,7 @@ Example fields available on each play row:
 - [x] Push repo to GitHub
 - [ ] Enable GitHub Pages from `main` / root
 - [ ] Confirm sheet remains publicly readable
-- [ ] Define and implement Chart 3
+- [x] Define and implement Chart 3
 
 ## Notes
 

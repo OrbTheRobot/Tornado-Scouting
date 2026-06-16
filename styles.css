@@ -135,6 +135,10 @@ select {
   min-height: 160px;
 }
 
+.chart-card--spiral {
+  min-height: 620px;
+}
+
 .chart-card h2 {
   margin: 0;
   font-size: 1.05rem;
@@ -231,6 +235,29 @@ select {
   font-size: 0.75rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+.spiral-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #121820;
+  padding: 0.75rem;
+}
+
+.spiral-canvas {
+  display: block;
+  width: min(100%, 560px);
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.spiral-legend {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
 }
 
 @media (max-width: 720px) {
