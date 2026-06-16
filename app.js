@@ -503,9 +503,8 @@ function drawPitchSpiralScene(context, center, maxRadius, points) {
   });
 }
 
-function attachSpiralZoom(canvas, drawScene) {
+function attachSpiralZoom(canvas, wrap, drawScene) {
   const view = { scale: 1, offsetX: 0, offsetY: 0 };
-  const wrap = canvas.parentElement;
 
   function layoutCanvas() {
     canvas.style.width = `${SPIRAL_CANVAS_SIZE}px`;
@@ -582,11 +581,11 @@ function renderPitchSpiral(pitcherRows, pitcherName) {
   const maxRadius = SPIRAL_CANVAS_SIZE * 0.36;
   const points = buildSpiralPoints(pitchRows, center, maxRadius);
 
-  attachSpiralZoom(canvas, (context) => {
+  canvasWrap.appendChild(canvas);
+
+  attachSpiralZoom(canvas, canvasWrap, (context) => {
     drawPitchSpiralScene(context, center, maxRadius, points);
   });
-
-  canvasWrap.appendChild(canvas);
 
   const legend = document.createElement('p');
   legend.className = 'spiral-legend';
