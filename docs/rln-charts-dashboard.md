@@ -61,8 +61,9 @@ Shows **all pitch history** for the selected pitcher, including result type as n
 | Node color | Each `Result` value maps to a distinct color; legend shown below the chart. |
 | Connectors | Smooth paths interpolated through the midpoint pitch number and radius, taking the shortest route around the 0/1000 boundary. |
 | Labels | Each point shows its pitch number inside the colored bubble; the most recent pitch has a white ring. |
+| Legend | Result color key is layered over the top of the spiral chart. |
 | Guides | Radial lines and labels at every 100 on the pitch scale (0/1000, 100, 200, …). |
-| Zoom | Scroll to zoom; the container scrolls when zoomed in so content is not clipped. |
+| Zoom | Scroll to zoom from center; high-resolution canvas redraw keeps detail sharp. |
 
 Guide labels appear at every 100 on the pitch scale. Chronological order uses the `Play` field.
 

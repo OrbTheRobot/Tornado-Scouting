@@ -136,7 +136,7 @@ select {
 }
 
 .chart-card--spiral {
-  min-height: 860px;
+  min-height: auto;
 }
 
 .chart-card h2 {
@@ -190,11 +190,23 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 0.85rem;
-  margin-top: 0.85rem;
   padding: 0.75rem 0.85rem;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: rgba(15, 20, 25, 0.55);
+}
+
+.result-legend--overlay {
+  position: absolute;
+  top: 0.85rem;
+  left: 0.85rem;
+  right: 0.85rem;
+  z-index: 2;
+  margin: 0;
+  max-height: 38%;
+  overflow-y: auto;
+  background: rgba(15, 20, 25, 0.82);
+  backdrop-filter: blur(6px);
 }
 
 .result-legend-item {
@@ -213,20 +225,27 @@ select {
   flex-shrink: 0;
 }
 
+.spiral-stage {
+  position: relative;
+  width: min(100%, 960px);
+  margin: 0 auto;
+}
+
 .spiral-canvas-wrap {
-  display: block;
+  position: relative;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: #121820;
-  padding: 0.75rem;
-  overflow: auto;
-  max-height: 920px;
+  width: 100%;
+  aspect-ratio: 1;
   cursor: zoom-in;
 }
 
 .spiral-canvas {
   display: block;
-  flex-shrink: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .spiral-legend {
@@ -234,6 +253,20 @@ select {
   color: var(--muted);
   font-size: 0.85rem;
   text-align: center;
+}
+
+.spiral-legend--overlay {
+  position: absolute;
+  left: 0.85rem;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  z-index: 2;
+  margin: 0;
+  padding: 0.45rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(15, 20, 25, 0.78);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
 }
 
 @media (max-width: 720px) {

@@ -4,6 +4,7 @@ const PITCH_MIN = 1;
 const PITCH_MAX = 1000;
 const LAST_PITCH_COUNT = 10;
 const SPIRAL_CANVAS_SIZE = 960;
+const SPIRAL_RENDER_SCALE = 3;
 const SPIRAL_MIN_RADIUS = 0.03;
 const SPIRAL_MAX_RADIUS = 0.88;
 const SPIRAL_RADIUS_SCALE = 0.4;
@@ -481,42 +482,36 @@ function renderResultLegend(resultColorMap) {
   return legend;
 }
 
-function attachSpiralZoom(canvas, wrap, drawScene) {
-  const view = { scale: 1, offsetX: 0, offsetY: 0 };
+function attachSpiralZoom(canvas, drawScene) {
+  const view = { scale: 1 };
+  const center = SPIRAL_CANVAS_SIZE / 2;
+  const pixelSize = SPIRAL_CANVAS_SIZE * SPIRAL_RENDER_SCALE;
 
-  function layoutCanvas() {
-    canvas.style.width = `${SPIRAL_CANVAS_SIZE}px`;
-    canvas.style.height = `${SPIRAL_CANVAS_SIZE}px`;
-    canvas.style.transformOrigin = 'top left';
-    canvas.style.transform = `translate(${view.offsetX}px, ${view.offsetY}px) scale(${view.scale})`;
-
-    const scaledSize = SPIRAL_CANVAS_SIZE * view.scale;
-    wrap.style.minWidth = `${scaledSize + Math.abs(view.offsetX)}px`;
-    wrap.style.minHeight = `${scaledSize + Math.abs(view.offsetY)}px`;
-  }
+  canvas.width = pixelSize;
+  canvas.height = pixelSize;
 
   function redraw() {
     const context = canvas.getContext('2d');
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.fillStyle = '#121820';
     context.fillRect(0, 0, canvas.width, canvas.height);
+    context.save();
+    context.scale(SPIRAL_RENDER_SCALE, SPIRAL_RENDER_SCALE);
+    context.translate(center, center);
+    context.scale(view.scale, view.scale);
+    context.translate(-center, -center);
     drawScene(context);
-    layoutCanvas();
+    context.restore();
   }
 
   canvas.addEventListener('wheel', (event) => {
     event.preventDefault();
 
-    const rect = canvas.getBoundingClientRect();
-    const scaleFactor = canvas.width / rect.width;
-    const pointerX = (event.clientX - rect.left) * scaleFactor;
-    const pointerY = (event.clientY - rect.top) * scaleFactor;
     const zoomMultiplier = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const nextScale = Math.min(SPIRAL_ZOOM_MAX, Math.max(SPIRAL_ZOOM_MIN, view.scale * zoomMultiplier));
-
-    view.offsetX = pointerX - ((pointerX - view.offsetX) * nextScale) / view.scale;
-    view.offsetY = pointerY - ((pointerY - view.offsetY) * nextScale) / view.scale;
-    view.scale = nextScale;
+    view.scale = Math.min(
+      SPIRAL_ZOOM_MAX,
+      Math.max(SPIRAL_ZOOM_MIN, view.scale * zoomMultiplier),
+    );
     redraw();
   }, { passive: false });
 
@@ -545,13 +540,17 @@ function renderPitchSpiral(pitcherRows, pitcherName) {
   const results = getUniqueResults(pitchRows.map(({ row }) => row));
   const resultColorMap = buildResultColorMap(results);
 
+  const stage = document.createElement('div');
+  stage.className = 'spiral-stage';
+
+  const legend = renderResultLegend(resultColorMap);
+  legend.classList.add('result-legend--overlay');
+
   const canvasWrap = document.createElement('div');
   canvasWrap.className = 'spiral-canvas-wrap';
 
   const canvas = document.createElement('canvas');
   canvas.className = 'spiral-canvas';
-  canvas.width = SPIRAL_CANVAS_SIZE;
-  canvas.height = SPIRAL_CANVAS_SIZE;
   canvas.setAttribute('role', 'img');
   canvas.setAttribute(
     'aria-label',
@@ -563,16 +562,18 @@ function renderPitchSpiral(pitcherRows, pitcherName) {
   const points = buildSpiralPoints(pitchRows, center, maxRadius, resultColorMap);
 
   canvasWrap.appendChild(canvas);
+  stage.append(legend, canvasWrap);
 
-  attachSpiralZoom(canvas, canvasWrap, (context) => {
+  attachSpiralZoom(canvas, (context) => {
     drawPitchSpiralScene(context, center, maxRadius, points);
   });
 
   const meta = document.createElement('p');
-  meta.className = 'spiral-legend';
+  meta.className = 'spiral-legend spiral-legend--overlay';
   meta.textContent = `${pitchRows.length.toLocaleString()} pitches · scroll to zoom · white ring marks most recent pitch`;
 
-  card.append(canvasWrap, renderResultLegend(resultColorMap), meta);
+  stage.appendChild(meta);
+  card.appendChild(stage);
   return card;
 }
 
