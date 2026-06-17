@@ -58,10 +58,10 @@ Shows **all pitch history** for the selected pitcher, including result type as n
 | --- | --- |
 | Angular position | `pitch # × 360 ÷ 1000` degrees clockwise from top center (500 at bottom, 250 at right). |
 | Radial position | Oldest pitch near the center; each later pitch is placed farther out with wide radial spread. |
-| Node color | Each `Result` value maps to a distinct color; legend shown below the chart. |
-| Connectors | Smooth paths interpolated through the midpoint pitch number and radius, taking the shortest route around the 0/1000 boundary. |
+| Node color | Raw `Result` codes are grouped into categories: **Base Hit** (1B, 1BWH, 2B, 3B, BB, etc.), **Out** (FO, GO, GORA, PO, DP31, etc.), **Strikeout** (K), **Home Run** (HR), and **Other** for unmapped codes. |
+| Connectors | Smooth paths interpolated through the midpoint pitch number and radius, taking the shortest route around the 0/1000 boundary. Solid lines connect consecutive pitches; dotted lines mark inning changes; dashed lines mark game changes. |
 | Labels | Each point shows its pitch number inside the colored bubble; the most recent pitch has a white ring. |
-| Legend | Result color key is layered over the top of the spiral chart. |
+| Legend | Result categories and transition line styles sit above the chart (not overlaid on the canvas). |
 | Guides | Radial lines and labels at every 100 on the pitch scale (0/1000, 100, 200, …). |
 | Zoom | Scroll to zoom from center; high-resolution canvas redraw keeps detail sharp. |
 

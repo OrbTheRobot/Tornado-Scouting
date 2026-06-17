@@ -196,17 +196,8 @@ select {
   background: rgba(15, 20, 25, 0.55);
 }
 
-.result-legend--overlay {
-  position: absolute;
-  top: 0.85rem;
-  left: 0.85rem;
-  right: 0.85rem;
-  z-index: 2;
-  margin: 0;
-  max-height: 38%;
-  overflow-y: auto;
-  background: rgba(15, 20, 25, 0.82);
-  backdrop-filter: blur(6px);
+.result-legend--top {
+  margin: 0 0 0.65rem;
 }
 
 .result-legend-item {
@@ -225,8 +216,34 @@ select {
   flex-shrink: 0;
 }
 
+.result-legend-break {
+  flex-basis: 100%;
+  margin-top: 0.35rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid rgba(154, 167, 181, 0.18);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.connector-line-swatch {
+  width: 1.75rem;
+  height: 0;
+  border-top: 2px solid rgba(154, 167, 181, 0.85);
+  flex-shrink: 0;
+}
+
+.connector-line-swatch--dotted {
+  border-top-style: dotted;
+}
+
+.connector-line-swatch--dashed {
+  border-top-style: dashed;
+}
+
 .spiral-stage {
-  position: relative;
   width: min(100%, 960px);
   margin: 0 auto;
 }
@@ -253,20 +270,6 @@ select {
   color: var(--muted);
   font-size: 0.85rem;
   text-align: center;
-}
-
-.spiral-legend--overlay {
-  position: absolute;
-  left: 0.85rem;
-  right: 0.85rem;
-  bottom: 0.85rem;
-  z-index: 2;
-  margin: 0;
-  padding: 0.45rem 0.65rem;
-  border-radius: 8px;
-  background: rgba(15, 20, 25, 0.78);
-  backdrop-filter: blur(6px);
-  pointer-events: none;
 }
 
 @media (max-width: 720px) {

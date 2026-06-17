@@ -15,28 +15,20 @@ const SPIRAL_ZOOM_MIN = 0.6;
 const SPIRAL_ZOOM_MAX = 8;
 const TWO_PI = Math.PI * 2;
 
-const RESULT_PALETTE = [
-  '#4f8cff',
-  '#35bfa5',
-  '#7c5cff',
-  '#f5a524',
-  '#ef6b6b',
-  '#56cfe1',
-  '#ff8fab',
-  '#80ed99',
-  '#ffd166',
-  '#9b5de5',
-  '#f15bb5',
-  '#00bbf9',
-  '#fee440',
-  '#00f5d4',
-  '#fb5607',
-  '#caffbf',
-  '#bdb2ff',
-  '#ffc6ff',
-  '#fdffb6',
-  '#a0c4ff',
-];
+const BASE_HIT_RESULTS = new Set(['1B', '1BWH', '2B', '2BWH', '3B', 'BB', 'IF1B']);
+const OUT_RESULTS = new Set(['FO', 'GO', 'GORA', 'PO', 'DP', 'DP31', 'DPH1', 'FC']);
+const STRIKEOUT_RESULTS = new Set(['K']);
+const HOME_RUN_RESULTS = new Set(['HR']);
+
+const RESULT_CATEGORY_ORDER = ['Base Hit', 'Out', 'Strikeout', 'Home Run', 'Other'];
+
+const RESULT_CATEGORY_COLORS = {
+  'Base Hit': '#4f8cff',
+  Out: '#35bfa5',
+  Strikeout: '#f5a524',
+  'Home Run': '#ef6b6b',
+  Other: '#9aa7b5',
+};
 
 const pitcherSelect = document.getElementById('pitcher-select');
 const statusEl = document.getElementById('status');
@@ -185,27 +177,32 @@ function getChronologicalPitchRows(rows) {
     .filter(Boolean);
 }
 
-function getUniqueResults(rows) {
-  const counts = new Map();
+function normalizeResultCategory(result) {
+  const code = result?.trim() || '';
 
-  rows.forEach((row) => {
-    const result = row.Result?.trim() || 'Unknown';
-    counts.set(result, (counts.get(result) ?? 0) + 1);
-  });
+  if (HOME_RUN_RESULTS.has(code)) {
+    return 'Home Run';
+  }
 
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([result]) => result);
+  if (STRIKEOUT_RESULTS.has(code)) {
+    return 'Strikeout';
+  }
+
+  if (BASE_HIT_RESULTS.has(code)) {
+    return 'Base Hit';
+  }
+
+  if (OUT_RESULTS.has(code)) {
+    return 'Out';
+  }
+
+  return 'Other';
 }
 
-function buildResultColorMap(results) {
-  const colorMap = new Map();
-
-  results.forEach((result, index) => {
-    colorMap.set(result, RESULT_PALETTE[index % RESULT_PALETTE.length]);
-  });
-
-  return colorMap;
+function getActiveResultCategories(points) {
+  return RESULT_CATEGORY_ORDER.filter((category) => (
+    points.some((point) => point.category === category)
+  ));
 }
 
 function createChartCard(title, description) {
@@ -316,7 +313,7 @@ function polarToCanvas(angle, radiusFraction, center, maxRadius) {
   };
 }
 
-function buildSpiralPoints(pitchRows, center, maxRadius, resultColorMap) {
+function buildSpiralPoints(pitchRows, center, maxRadius) {
   const chronological = [...pitchRows].sort((a, b) => a.playOrder - b.playOrder);
   const count = chronological.length;
 
@@ -327,15 +324,31 @@ function buildSpiralPoints(pitchRows, center, maxRadius, resultColorMap) {
     const angle = pitchNumberToAngle(entry.pitchNumber);
     const point = polarToCanvas(angle, radiusFraction, center, maxRadius);
     const result = entry.row.Result?.trim() || 'Unknown';
+    const category = normalizeResultCategory(result);
 
     return {
       ...point,
       pitchNumber: entry.pitchNumber,
       result,
-      color: resultColorMap.get(result) ?? '#9aa7b5',
+      category,
+      color: RESULT_CATEGORY_COLORS[category],
+      game: entry.row.Game?.trim() || '',
+      inning: entry.row.Inning?.trim() || '',
       playOrder: entry.playOrder,
     };
   });
+}
+
+function getConnectorLineDash(fromPoint, toPoint) {
+  if (fromPoint.game !== toPoint.game) {
+    return [14, 8];
+  }
+
+  if (fromPoint.inning !== toPoint.inning) {
+    return [2, 6];
+  }
+
+  return [];
 }
 
 function drawSpiralGuide(context, center, maxRadius) {
@@ -380,6 +393,8 @@ function drawSpiralGuide(context, center, maxRadius) {
 }
 
 function drawSpiralConnector(context, fromPoint, toPoint, center, maxRadius) {
+  const lineDash = getConnectorLineDash(fromPoint, toPoint);
+
   context.beginPath();
   context.moveTo(fromPoint.x, fromPoint.y);
 
@@ -401,7 +416,9 @@ function drawSpiralConnector(context, fromPoint, toPoint, center, maxRadius) {
     context.lineTo(sample.x, sample.y);
   }
 
+  context.setLineDash(lineDash);
   context.stroke();
+  context.setLineDash([]);
 }
 
 function drawSpiralPoint(context, point, isLatest) {
@@ -458,26 +475,46 @@ function drawPitchSpiralScene(context, center, maxRadius, points) {
   });
 }
 
-function renderResultLegend(resultColorMap) {
+function renderSpiralLegend(categories) {
   const legend = document.createElement('div');
-  legend.className = 'result-legend';
+  legend.className = 'result-legend result-legend--top';
 
-  [...resultColorMap.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .forEach(([result, color]) => {
-      const item = document.createElement('span');
-      item.className = 'result-legend-item';
+  categories.forEach((category) => {
+    const item = document.createElement('span');
+    item.className = 'result-legend-item';
 
-      const swatch = document.createElement('span');
-      swatch.className = 'result-legend-swatch';
-      swatch.style.backgroundColor = color;
+    const swatch = document.createElement('span');
+    swatch.className = 'result-legend-swatch';
+    swatch.style.backgroundColor = RESULT_CATEGORY_COLORS[category];
 
-      const label = document.createElement('span');
-      label.textContent = result;
+    const label = document.createElement('span');
+    label.textContent = category;
 
-      item.append(swatch, label);
-      legend.appendChild(item);
-    });
+    item.append(swatch, label);
+    legend.appendChild(item);
+  });
+
+  const transitionHeading = document.createElement('div');
+  transitionHeading.className = 'result-legend-break';
+  transitionHeading.textContent = 'Transitions';
+  legend.appendChild(transitionHeading);
+
+  [
+    { label: 'Inning change', swatchClass: 'connector-line-swatch connector-line-swatch--dotted' },
+    { label: 'Game change', swatchClass: 'connector-line-swatch connector-line-swatch--dashed' },
+  ].forEach(({ label, swatchClass }) => {
+    const item = document.createElement('span');
+    item.className = 'result-legend-item';
+
+    const swatch = document.createElement('span');
+    swatch.className = swatchClass;
+
+    const text = document.createElement('span');
+    text.textContent = label;
+
+    item.append(swatch, text);
+    legend.appendChild(item);
+  });
 
   return legend;
 }
@@ -521,7 +558,7 @@ function attachSpiralZoom(canvas, drawScene) {
 function renderPitchSpiral(pitcherRows, pitcherName) {
   const card = createChartCard(
     'Pitch spiral',
-    'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Color shows result type; newer pitches sit farther from center. Scroll to zoom.',
+    'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Color shows result type; line style marks inning and game transitions. Scroll to zoom.',
   );
   card.classList.add('chart-card--wide', 'chart-card--spiral');
 
@@ -537,14 +574,13 @@ function renderPitchSpiral(pitcherRows, pitcherName) {
     return card;
   }
 
-  const results = getUniqueResults(pitchRows.map(({ row }) => row));
-  const resultColorMap = buildResultColorMap(results);
+  const center = SPIRAL_CANVAS_SIZE / 2;
+  const maxRadius = SPIRAL_CANVAS_SIZE * SPIRAL_RADIUS_SCALE;
+  const points = buildSpiralPoints(pitchRows, center, maxRadius);
+  const legend = renderSpiralLegend(getActiveResultCategories(points));
 
   const stage = document.createElement('div');
   stage.className = 'spiral-stage';
-
-  const legend = renderResultLegend(resultColorMap);
-  legend.classList.add('result-legend--overlay');
 
   const canvasWrap = document.createElement('div');
   canvasWrap.className = 'spiral-canvas-wrap';
@@ -554,12 +590,8 @@ function renderPitchSpiral(pitcherRows, pitcherName) {
   canvas.setAttribute('role', 'img');
   canvas.setAttribute(
     'aria-label',
-    `Pitch spiral for ${pitcherName} with ${pitchRows.length} pitches colored by result.`,
+    `Pitch spiral for ${pitcherName} with ${pitchRows.length} pitches colored by result category.`,
   );
-
-  const center = SPIRAL_CANVAS_SIZE / 2;
-  const maxRadius = SPIRAL_CANVAS_SIZE * SPIRAL_RADIUS_SCALE;
-  const points = buildSpiralPoints(pitchRows, center, maxRadius, resultColorMap);
 
   canvasWrap.appendChild(canvas);
   stage.append(legend, canvasWrap);
@@ -569,7 +601,7 @@ function renderPitchSpiral(pitcherRows, pitcherName) {
   });
 
   const meta = document.createElement('p');
-  meta.className = 'spiral-legend spiral-legend--overlay';
+  meta.className = 'spiral-legend';
   meta.textContent = `${pitchRows.length.toLocaleString()} pitches · scroll to zoom · white ring marks most recent pitch`;
 
   stage.appendChild(meta);
