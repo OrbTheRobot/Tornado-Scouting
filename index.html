@@ -11,24 +11,96 @@
       <header class="hero">
         <h1>Tornado Scouting</h1>
         <p>
-          Live dashboard from the public Google Sheet. Filter by pitcher to update the table and pitch spiral below.
+          Live dashboard from the public Google Sheet. Filter by pitcher and batter to update the table and charts below.
         </p>
       </header>
 
       <section class="controls">
-        <div class="control-group">
-          <label for="pitcher-select">Pitcher</label>
-          <select id="pitcher-select" aria-label="Filter by pitcher"></select>
+        <div class="controls-primary">
+          <div class="control-group">
+            <label for="pitcher-select">Pitcher</label>
+            <select id="pitcher-select" aria-label="Filter by pitcher"></select>
+          </div>
+
+          <div class="control-group">
+            <label for="batter-select">Batter</label>
+            <select id="batter-select" aria-label="Filter by batter"></select>
+          </div>
+
+          <div class="control-group control-group--sync">
+            <button type="button" id="sync-sheet-btn" class="btn-sync">Sync</button>
+          </div>
         </div>
 
-        <div class="control-group control-group--action">
-          <span class="control-label-spacer" aria-hidden="true">&nbsp;</span>
-          <button type="button" id="sync-sheet-btn" class="btn-sync">Sync sheet</button>
+        <div class="controls-secondary">
+          <div class="control-group control-group--hypothetical">
+            <label class="control-checkbox" for="hypothetical-swing-toggle">
+              <input type="checkbox" id="hypothetical-swing-toggle" />
+              Hypothetical Swing
+            </label>
+            <div id="hypothetical-swing-fields" class="hypothetical-swing-fields" hidden>
+              <label for="hypothetical-swing-input">Swing</label>
+              <div class="hypothetical-swing-actions">
+                <input
+                  type="number"
+                  id="hypothetical-swing-input"
+                  min="0"
+                  max="1000"
+                  step="1"
+                  inputmode="numeric"
+                  aria-label="Swing number from 0 to 1000"
+                />
+                <button type="button" id="simulate-swing-btn" class="btn-sync">Simulate Swing</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="meta">
+            <span class="pill" id="row-count">0 plays</span>
+            <span id="status">Initializing...</span>
+          </div>
         </div>
 
-        <div class="meta">
-          <span class="pill" id="row-count">0 plays</span>
-          <span id="status">Initializing...</span>
+      </section>
+
+      <section class="situation-panel" id="situation-panel" aria-label="Game situation">
+        <div class="situation-panel__header">
+          <h2>Situation</h2>
+          <p>Set base runners and outs to build the normal-swing range table for the selected matchup.</p>
+        </div>
+
+        <div class="situation-panel__body">
+          <div class="diamond-panel">
+            <svg class="diamond-graphic" viewBox="0 0 220 220" aria-hidden="true">
+              <path class="diamond-graphic__infield" d="M110 24 L196 110 L110 196 L24 110 Z" />
+              <path class="diamond-graphic__grass" d="M110 52 L168 110 L110 168 L52 110 Z" />
+            </svg>
+
+            <fieldset class="base-picker base-picker--second">
+              <legend>2nd</legend>
+              <label><input type="radio" name="runner-second" value="empty" checked /> Empty</label>
+              <label><input type="radio" name="runner-second" value="on" /> Runner</label>
+            </fieldset>
+
+            <fieldset class="base-picker base-picker--third">
+              <legend>3rd</legend>
+              <label><input type="radio" name="runner-third" value="empty" checked /> Empty</label>
+              <label><input type="radio" name="runner-third" value="on" /> Runner</label>
+            </fieldset>
+
+            <fieldset class="base-picker base-picker--first">
+              <legend>1st</legend>
+              <label><input type="radio" name="runner-first" value="empty" checked /> Empty</label>
+              <label><input type="radio" name="runner-first" value="on" /> Runner</label>
+            </fieldset>
+          </div>
+
+          <fieldset class="outs-picker">
+            <legend>Outs</legend>
+            <label><input type="radio" name="outs-count" value="0" checked /> 0</label>
+            <label><input type="radio" name="outs-count" value="1" /> 1</label>
+            <label><input type="radio" name="outs-count" value="2" /> 2</label>
+          </fieldset>
         </div>
       </section>
 
