@@ -67,7 +67,7 @@ Shows **all pitch history** for the selected pitcher.
 | --- | --- |
 | Angular position | `pitch # × 360 ÷ 1000` degrees clockwise from top center (500 at bottom, 250 at right). |
 | Radial position | Oldest pitch near the center; each later pitch is placed farther out. |
-| Connectors | Smooth paths interpolated through the midpoint pitch number and radius between each pair of pitches. |
+| Connectors | Smooth paths interpolated through the midpoint pitch number and radius, taking the shortest route around the 0/1000 boundary. |
 | Labels | Each point shows its pitch number inside a sized bubble; the most recent pitch is highlighted in green. |
 | Guides | Radial lines and labels at every 100 on the pitch scale (0/1000, 100, 200, …). |
 | Zoom | Scroll to zoom; the container scrolls when zoomed in so content is not clipped. |

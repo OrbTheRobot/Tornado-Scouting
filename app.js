@@ -5,12 +5,12 @@ const PITCH_MAX = 1000;
 const LAST_PITCH_COUNT = 10;
 const HEATMAP_ROW_HEIGHT = 40;
 const HEATMAP_BUBBLE_RADIUS = 15;
-const SPIRAL_CANVAS_SIZE = 640;
-const SPIRAL_MIN_RADIUS = 0.08;
-const SPIRAL_MAX_RADIUS = 0.52;
-const SPIRAL_POINT_RADIUS = 11;
-const SPIRAL_LATEST_RADIUS = 13;
-const SPIRAL_CONNECTOR_STEPS = 48;
+const SPIRAL_CANVAS_SIZE = 960;
+const SPIRAL_MIN_RADIUS = 0.05;
+const SPIRAL_MAX_RADIUS = 0.65;
+const SPIRAL_POINT_RADIUS = 12;
+const SPIRAL_LATEST_RADIUS = 14;
+const SPIRAL_CONNECTOR_STEPS = 72;
 const SPIRAL_ZOOM_MIN = 0.6;
 const SPIRAL_ZOOM_MAX = 8;
 const TWO_PI = Math.PI * 2;
@@ -356,6 +356,30 @@ function pitchNumberToAngle(pitchNumber) {
   return (pitchNumber / PITCH_MAX) * TWO_PI;
 }
 
+function getShortestPitchDelta(fromPitch, toPitch) {
+  let delta = toPitch - fromPitch;
+
+  if (delta > PITCH_MAX / 2) {
+    delta -= PITCH_MAX;
+  } else if (delta < -PITCH_MAX / 2) {
+    delta += PITCH_MAX;
+  }
+
+  return delta;
+}
+
+function interpolatePitchNumber(fromPitch, toPitch, progress) {
+  const delta = getShortestPitchDelta(fromPitch, toPitch);
+  let pitch = fromPitch + delta * progress;
+
+  pitch = ((pitch % PITCH_MAX) + PITCH_MAX) % PITCH_MAX;
+  if (pitch === 0) {
+    pitch = PITCH_MAX;
+  }
+
+  return pitch;
+}
+
 function polarToCanvas(angle, radiusFraction, center, maxRadius) {
   const radius = radiusFraction * maxRadius;
   return {
@@ -433,8 +457,11 @@ function drawSpiralConnector(context, fromPoint, toPoint, center, maxRadius) {
 
   for (let step = 1; step <= SPIRAL_CONNECTOR_STEPS; step += 1) {
     const progress = step / SPIRAL_CONNECTOR_STEPS;
-    const pitchNumber = fromPoint.pitchNumber
-      + (toPoint.pitchNumber - fromPoint.pitchNumber) * progress;
+    const pitchNumber = interpolatePitchNumber(
+      fromPoint.pitchNumber,
+      toPoint.pitchNumber,
+      progress,
+    );
     const radiusFraction = fromPoint.radius
       + (toPoint.radius - fromPoint.radius) * progress;
     const sample = polarToCanvas(
@@ -578,7 +605,7 @@ function renderPitchSpiral(pitcherRows, pitcherName) {
   );
 
   const center = SPIRAL_CANVAS_SIZE / 2;
-  const maxRadius = SPIRAL_CANVAS_SIZE * 0.36;
+  const maxRadius = SPIRAL_CANVAS_SIZE * 0.38;
   const points = buildSpiralPoints(pitchRows, center, maxRadius);
 
   canvasWrap.appendChild(canvas);

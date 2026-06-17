@@ -136,7 +136,7 @@ select {
 }
 
 .chart-card--spiral {
-  min-height: 700px;
+  min-height: 860px;
 }
 
 .chart-card h2 {
@@ -243,7 +243,7 @@ select {
   background: #121820;
   padding: 0.75rem;
   overflow: auto;
-  max-height: 720px;
+  max-height: 920px;
   cursor: zoom-in;
 }
 
