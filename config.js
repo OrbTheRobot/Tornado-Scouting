@@ -1,10 +1,40 @@
 export const SHEET_CONFIG = {
-  spreadsheetId: '1lcgT6np-4O5x83b2JZXjv8REfNDYXE7GMYMZeu5znRY',
+  spreadsheetId: '1VViAMYTIwtyiWibrDES-q98xgek7hynYxGtAizWi0Y0',
   sheetName: 'Plays (Converted)',
   playersSheetName: 'Players',
   playersImportSheetName: 'import_players',
   filterColumn: 'Pitcher',
 };
+
+/** Alternate header names on WNC export tabs mapped to canonical play fields. */
+export const PLAYS_FIELD_SOURCES = {
+  'Pitch #': ['Pitch #', 'Pitch'],
+  'Swing #': ['Swing #', 'Swing'],
+};
+
+export function normalizePlayRow(row) {
+  const normalized = { ...row };
+
+  for (const [canonical, sources] of Object.entries(PLAYS_FIELD_SOURCES)) {
+    if (String(normalized[canonical] ?? '').trim()) {
+      continue;
+    }
+
+    for (const source of sources) {
+      if (source === canonical) {
+        continue;
+      }
+
+      const value = normalized[source];
+      if (String(value ?? '').trim()) {
+        normalized[canonical] = value;
+        break;
+      }
+    }
+  }
+
+  return normalized;
+}
 
 export const PLAYER_SHEET_COLUMNS = {
   name: 3,
@@ -16,10 +46,10 @@ export const PLAYER_SHEET_COLUMNS = {
     spd: 13,
   },
   pitching: {
-    con: 14,
-    eye: 15,
-    pow: 16,
-    spd: 17,
+    con: 15,
+    eye: 16,
+    pow: 17,
+    spd: 18,
   },
 };
 

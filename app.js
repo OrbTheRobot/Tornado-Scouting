@@ -1,4 +1,4 @@
-import { SHEET_CONFIG, PLAYER_SHEET_COLUMNS, getSheetCsvUrl } from './config.js';
+import { SHEET_CONFIG, PLAYER_SHEET_COLUMNS, getSheetCsvUrl, normalizePlayRow } from './config.js';
 import { buildRangeTable } from './rangeEngine.js';
 
 const PITCH_MIN = 1;
@@ -1900,7 +1900,7 @@ async function loadSheetData({ forceRefresh = false } = {}) {
 
     const playsCsvText = await playsResponse.text();
     const playsMatrix = parseCsv(playsCsvText);
-    allRows = rowsToObjects(playsMatrix);
+    allRows = rowsToObjects(playsMatrix).map(normalizePlayRow);
     playerStatsByName = playerStats;
 
     const pitchers = getUniquePitchers(allRows);

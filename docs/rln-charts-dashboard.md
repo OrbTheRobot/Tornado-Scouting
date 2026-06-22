@@ -21,12 +21,12 @@ flowchart LR
 
 | Setting | Value |
 | --- | --- |
-| Spreadsheet ID | `1lcgT6np-4O5x83b2JZXjv8REfNDYXE7GMYMZeu5znRY` |
+| Spreadsheet ID | `1VViAMYTIwtyiWibrDES-q98xgek7hynYxGtAizWi0Y0` (WNC 3 Export Tables) |
 | Plays tab | `Plays (Converted)` |
 | Players tab | `Players` |
 | Player import tab | `import_players` (uses expanded rows when present; otherwise follows the **Player Universe** IMPORTRANGE to `Players`) |
 | Filter field | `Pitcher` (plays column I) |
-| Pitch number field | `Pitch #` (plays column J), scale 1–1000 |
+| Pitch number field | `Pitch #` (alias: `Pitch` on WNC exports), scale 1–1000 |
 | Plays fetch URL | `https://docs.google.com/spreadsheets/d/{id}/gviz/tq?tqx=out:csv&sheet=Plays%20(Converted)` |
 | Players fetch URL | `https://docs.google.com/spreadsheets/d/{id}/gviz/tq?tqx=out:csv&sheet=Players` |
 
@@ -92,7 +92,7 @@ Shows pitcher and batter ratings side by side for the selected matchup. Stats co
 
 | Side | Stat columns |
 | --- | --- |
-| Pitcher | Hand (J), MOV (O), CMD (P), VEL (Q), AWR (R) |
+| Pitcher | Hand (J), MOV (P), CMD (Q), VEL (R), AWR (S) |
 | Batter | Hand (J), CON (K), EYE (L), POW (M), SPD (N) |
 
 Displayed beside the **Situation** panel in the dashboard top row, to the left of the range table.
@@ -137,7 +137,7 @@ Shows absolute pitch-to-pitch delta on a **flat horizontal axis** from **500 ↺
 Example fields available on each play row:
 
 - `Game`, `Inning`, `Play`, `Outs`, `BRC`, `OFF`, `DEF`
-- `PlayType`, `Pitcher`, `Pitch #`, `Batter`, `Swing #`
+- `PlayType`, `Pitcher`, `Pitch #` (or `Pitch`), `Batter`, `Swing #` (or `Swing`)
 - `Catcher`, `Throw #`, `Runner`, `Steal #`, `Result`, `Runs`
 - `Pitcher ID`, `Batter ID`, `Catcher Id`, `Runner ID`, `Diff`, `Session #`
 

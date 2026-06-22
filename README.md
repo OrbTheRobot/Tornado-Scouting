@@ -6,7 +6,7 @@ Repository: [OrbTheRobot/Tornado-Scouting](https://github.com/OrbTheRobot/Tornad
 
 ## Data source
 
-- Spreadsheet: [RLN Export Tables 12.0](https://docs.google.com/spreadsheets/d/1lcgT6np-4O5x83b2JZXjv8REfNDYXE7GMYMZeu5znRY/edit)
+- Spreadsheet: [WNC 3 Export Tables](https://docs.google.com/spreadsheets/d/1VViAMYTIwtyiWibrDES-q98xgek7hynYxGtAizWi0Y0/edit)
 - Tab: `Plays (Converted)`
 - Filter column: `Pitcher` (column I)
 
