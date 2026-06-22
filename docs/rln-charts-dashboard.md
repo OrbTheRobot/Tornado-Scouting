@@ -9,28 +9,44 @@ Tornado Scouting is a client-side dashboard that reads play-by-play data from a 
 ```mermaid
 flowchart LR
     PlaysSheet[Google Sheet Plays Converted] -->|gviz CSV| App[Static web app]
+    ArchiveSheet[MLN archive Converted Play Log] -->|gviz CSV filtered by season| App
     PlayersSheet[Google Sheet Players] -->|gviz CSV| App
+    GamesSheet[Google Sheet Games] -->|gviz CSV| App
+    DatesSheet[Google Sheet Dates] -->|gviz CSV| App
     App --> Filter[Pitcher dropdown]
-    Filter --> Table[Last 10 pitches table]
-    Filter --> Stats[Matchup stats]
     Filter --> Spiral[Spiral Scouting Graph]
-    Filter --> Matsumoto[Matsumoto Plot]
 ```
 
 ## Data contract
 
 | Setting | Value |
 | --- | --- |
-| Spreadsheet ID | `1VViAMYTIwtyiWibrDES-q98xgek7hynYxGtAizWi0Y0` (WNC 3 Export Tables) |
+| Spreadsheet ID | `1NQ4l0EjwFYVdIjlYIkycYfuWw_jdZKiWsNURTcTy4AA` (Export Tables) |
+| Historical import guide | `10YijQ45zwO2uxws7HF1As46pz3dFnxv_qcI-EIvSXCg` ([MLN Data Import Guide](https://docs.google.com/spreadsheets/d/10YijQ45zwO2uxws7HF1As46pz3dFnxv_qcI-EIvSXCg/edit)) |
+| Historical play archive | `1H9ES_TL9nC0x-Q3auM6jtLcb6bII--eu4MtcAPoFcqg` tab `Converted Play Log` (season 12+ via gviz query) |
 | Plays tab | `Plays (Converted)` |
 | Players tab | `Players` |
+| Games tab | `Games` |
+| Dates tab | `Dates` |
 | Player import tab | `import_players` (uses expanded rows when present; otherwise follows the **Player Universe** IMPORTRANGE to `Players`) |
+| Scout team | `SUN` |
 | Filter field | `Pitcher` (plays column I) |
-| Pitch number field | `Pitch #` (alias: `Pitch` on WNC exports), scale 1–1000 |
+| Pitch number field | `Pitch #` (alias: `Pitch` on export tabs), scale 1–1000 |
 | Plays fetch URL | `https://docs.google.com/spreadsheets/d/{id}/gviz/tq?tqx=out:csv&sheet=Plays%20(Converted)` |
 | Players fetch URL | `https://docs.google.com/spreadsheets/d/{id}/gviz/tq?tqx=out:csv&sheet=Players` |
 
-The app maps CSV headers to row objects and filters rows where `Pitcher` equals the selected dropdown value. The batter dropdown lists all players from the imported player universe (not limited to batters the selected pitcher has faced); it defaults to the most recent batter faced when available. Matchup stats are looked up by matching `Government Name` (column D) to the selected pitcher and batter, merged from the `Players` tab and `import_players` (including the IMPORTRANGE player universe when that tab only contains import formulas). All charts use the selected pitcher. The first pitcher in the sheet is selected by default on load. Use **Sync sheet** in the controls bar to fetch the latest CSV from both tabs on demand; the selected pitcher is preserved when possible.
+The app maps CSV headers to row objects and filters rows where `Pitcher` equals the selected dropdown value. **Live plays, players, games, and dates** come from the Export Tables sheet. **Historical play rows** for spiral delta overlays are fetched from the MLN archive (`Converted Play Log`, seasons **11–13** via gviz query) and merged with current-sheet plays for the same seasons. Season **13** comes from the current Export Tables sheet; seasons **11–12** come from the archive referenced by the [MLN Data Import Guide](https://docs.google.com/spreadsheets/d/10YijQ45zwO2uxws7HF1As46pz3dFnxv_qcI-EIvSXCg/edit). Rows are deduped by `Game` + `Play` with current-sheet rows winning overlaps. **Pitch charts and tables** use the merged seasons **11–13** dataset (not current-sheet rows alone), so pitchers with archive history still render when the live Export Tables tab is empty or sparse. Matsumoto-style overlays use the same merged pool. Live game lock, score, and situation inference still use current-sheet plays only. Matchup stats and player dropdowns continue to use the current Export Tables **Players** tab only.
+
+## Scouting modes
+
+| Mode | Pitcher dropdown | Batter dropdown | Game lock |
+| --- | --- | --- | --- |
+| **Live Scouting** (default) | Active pitchers on the opponent team for the locked SUN game | Active `SUN` roster players | Current live SUN game, or the next upcoming SUN game in the active session |
+| **Speculation** | Any pitcher with play data | Any player in the roster import | None |
+
+Live game resolution uses the **Dates** tab to find the current session (or the next upcoming session before the season starts) and the **Games** tab to find `SUN` matchups in that session. A game is treated as live when it has a `Start` time without `End`, or when converted plays exist for that `Game#` and the game is not finished. Otherwise the first unfinished SUN game in the session is used as the upcoming matchup. The controls bar shows the locked matchup label (for example `Upcoming: SUN @ HFX · Session 1 · vs HFX`). The spiral graph defaults to the pitcher’s last **3 games**; Matsumoto-style delta box-plot stats use the last **3 seasons** (derived from the first two digits of `Game#`).
+
+Player rosters for live mode come from the **Players** tab (`Team`, `Status`, `Primary`). Opponent pitchers are filtered to `Primary = P`. SUN batters include all active SUN roster players.
 
 ## Situation panel and range table
 
@@ -40,6 +56,8 @@ The **Situation** panel shares a top row with **Matchup** and **Range table** (s
 |---------|---------|
 | Diamond base pickers (1st / 2nd / 3rd) | Checkbox on each base (checked = runner on base) |
 | Outs | Dropdown centered inside the diamond: 0, 1, or 2 outs |
+
+In **Live Scouting** mode, the situation panel is hidden and a read-only base/out graphic is shown inside the **Matchup** card, inferred from the latest `SUN` offensive play in the locked game using the play sheet `BRC` runner mask and `Outs` columns. **Speculation** mode keeps the separate **Situation** panel with manual diamond controls.
 
 The range table is computed client-side from stadium calculator logic (`rangeEngine.js` + `calculator-tables.js`):
 
@@ -64,69 +82,37 @@ Then copy any updated values into `calculator-tables.js`.
 | File | Responsibility |
 | --- | --- |
 | `index.html` | Page shell and chart container |
-| `styles.css` | Layout, table, spiral, and legend theme |
+| `styles.css` | Layout, table, spiral, and legend theme (purple SUN palette) |
 | `config.js` | Sheet ID, tab names, filter column, player column indices |
+| `liveScouting.js` | Session/game resolution and live roster filtering for SUN matchups |
 | `app.js` | CSV fetch/parse, filter logic, table, stats, and spiral rendering |
 
-## Charts
+## Layout and charts
 
-### Chart 1 — Last 10 pitches (table)
+The header stacks two full-width panels above the spiral: a **Matchup** panel (pitcher and batter side by side, each with dropdown + one-line stats underneath) and **Live game** (score, situation diamond, sync status).
 
-Shows the 10 most recent pitches for the selected pitcher, sorted chronologically by `Play` (most recent first). Full-width card above the Spiral Scouting Graph.
+### Spiral Scouting Graph
 
-| Column | Source field |
-| --- | --- |
-| Pitch | `Pitch #` |
-| Δ | Absolute shortest-path delta from the chronologically previous pitch (wraps at 0/1000) |
-| Dir | Rotation from previous pitch: ↻ (clockwise) or ↺ (counter-clockwise); `—` for the oldest row |
-| Swing | `Swing #` |
-| Result | `Result` |
-| Batter | `Batter` |
-| Inning | `Inning` |
-
-Rows without a valid pitch number (1–1000) are excluded.
-
-### Chart 1b — Matchup (compact list)
-
-Shows pitcher and batter ratings side by side for the selected matchup. Stats come from the **Players** tab, matched on `Government Name`.
-
-| Side | Stat columns |
-| --- | --- |
-| Pitcher | Hand (J), MOV (P), CMD (Q), VEL (R), AWR (S) |
-| Batter | Hand (J), CON (K), EYE (L), POW (M), SPD (N) |
-
-Displayed beside the **Situation** panel in the dashboard top row, to the left of the range table.
-
-### Chart 2 — Spiral Scouting Graph
-
-Shows recent pitch history for the selected pitcher, including result type as node color. Use the **Recency** dropdown in the controls bar to limit the graph to the most recent 10, 20, 30, 40, or 50 pitches, or **All** (default **20**).
+Shows recent pitch history for the selected pitcher, including result type as node color. Defaults to the pitcher’s last **3 games**.
 
 | Element | Behavior |
 | --- | --- |
-| Recency filter | Limits graph to the most recent N pitches by `Play` order; footer shows `N of total` when filtered. |
+| Game window | Limits graph to the most recent 3 games by `Play` order; footer shows `N of total` when filtered. |
 | Angular position | `pitch # × 360 ÷ 1000` degrees clockwise from top center (500 at bottom, 250 at right). |
 | Radial position | Oldest pitch near the center; each later pitch is placed farther out with wide radial spread. |
 | Node color | Raw `Result` codes are grouped into categories: **Base Hit** (blue), **Out** (orange), **Strikeout** (red), **Home Run** (green), and **Other** (gray). |
 | Connectors | Smooth paths interpolated through the midpoint pitch number and radius, taking the shortest route around the 0/1000 boundary. Each segment uses the previous pitch's result color at 36% opacity. Inning and game transitions use neutral grey at 70% opacity (dotted/dashed) instead of result color. Solid lines connect consecutive pitches; dotted lines mark inning changes; dashed lines mark game changes. |
 | Labels | Each point shows its pitch number inside the colored bubble; the most recent pitch has a white ring. |
-| Legend | Result categories and transition line styles sit above the chart (not overlaid on the canvas). |
+| Outer Δ band | Uses Matsumoto logic on the last **3 seasons** of pitcher data. Takes the **latest pitch** in the spiral window, groups historical transitions by that result type, and draws min/Q1/median/Q3/max as an annular box plot on the outer guide ring, **centered on the latest pitch** angle. |
+| Legend | Result categories, transition line styles, and the active outer Δ band sit above the chart (not overlaid on the canvas). |
 | Guides | Radial lines and labels at every 100 on the pitch scale (0/1000, 100, 200, …). |
 | Zoom | Scroll to zoom from center; high-resolution canvas redraw keeps detail sharp. |
-| Hypothetical swing | Optional control: check **Hypothetical Swing**, enter a swing number (0–1000), then click **Simulate Swing**. Draws a light-red target at that swing angle on the outer radius plus a straight line to the center. Clears when unchecked or when the pitcher changes. |
-| Range markers | When **Hypothetical Swing** is active, each bracket band fills a thin annular slice (about one-quarter the previous thickness) on the outer guide with 25%-opacity color and 75%-opacity boundary ticks. Each tick is labeled with its pitch number in the matching color. Result codes label the bands (`|1B|2B|3B|HR|3B|2B|1B|`, with red **K** in the outermost band). |
 
-Guide labels appear at every 100 on the pitch scale. Chronological order uses the `Play` field. Hypothetical swing and range markers use the same angular scale as pitch/swing numbers (`swing # × 360 ÷ 1000`).
+Guide labels appear at every 100 on the pitch scale. Chronological order uses the `Play` field.
 
-### Chart 3 — Matsumoto Plot (horizontal box plot)
+### Matsumoto stats (embedded in spiral)
 
-Shows absolute pitch-to-pitch delta on a **flat horizontal axis** from **500 ↺** (left) through **0** (center) to **500 ↻** (right). Uses the same **Recency** filter as the Spiral Scouting Graph.
-
-| Element | Behavior |
-| --- | --- |
-| Layout | Four 40px stacked bands (HR, Hit, Out, K) with 40px gaps between them; canvas height is computed from band/gap/axis dimensions (no fixed top padding). |
-| Box plot | Shaded horizontal band = Q1–Q3; whiskers to min/max; thick vertical tick at median. |
-| Points | Aggregate labels only: **Q1/Q3** on the band center line, inset inside the shaded box; **min, median, max** centered in the gap above each band. Individual pitches are not plotted. |
-| Category | Grouped by the **current pitch** result type. **Other** results are excluded. |
+Pitch-to-pitch signed deltas are grouped by the **current pitch** result type (**HR**, **Hit**, **Out**, **K**; **Other** excluded). Box-plot stats (min, Q1, median, Q3, max) are computed from the last 3 seasons and rendered as the outer annular band on the spiral for the latest pitch only.
 
 ## Extending charts
 
@@ -146,7 +132,7 @@ Example fields available on each play row:
 - [x] Push repo to GitHub
 - [ ] Enable GitHub Pages from `main` / root
 - [ ] Confirm sheet remains publicly readable
-- [x] Define and implement Chart 3 (Matsumoto Plot)
+- [x] Matsumoto delta stats embedded in spiral outer band
 
 ## Notes
 

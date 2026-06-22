@@ -1,12 +1,24 @@
 export const SHEET_CONFIG = {
-  spreadsheetId: '1VViAMYTIwtyiWibrDES-q98xgek7hynYxGtAizWi0Y0',
+  spreadsheetId: '1NQ4l0EjwFYVdIjlYIkycYfuWw_jdZKiWsNURTcTy4AA',
   sheetName: 'Plays (Converted)',
   playersSheetName: 'Players',
   playersImportSheetName: 'import_players',
+  gamesSheetName: 'Games',
+  datesSheetName: 'Dates',
   filterColumn: 'Pitcher',
+  scoutTeamAbv: 'SUN',
 };
 
-/** Alternate header names on WNC export tabs mapped to canonical play fields. */
+/** Historical play archive referenced by the MLN Data Import Guide sheet. */
+export const HISTORICAL_PLAYS_CONFIG = {
+  guideSpreadsheetId: '10YijQ45zwO2uxws7HF1As46pz3dFnxv_qcI-EIvSXCg',
+  spreadsheetId: '1H9ES_TL9nC0x-Q3auM6jtLcb6bII--eu4MtcAPoFcqg',
+  sheetName: 'Converted Play Log',
+  minSeason: 11,
+  maxSeason: 13,
+};
+
+/** Alternate header names on export tabs mapped to canonical play fields. */
 export const PLAYS_FIELD_SOURCES = {
   'Pitch #': ['Pitch #', 'Pitch'],
   'Swing #': ['Swing #', 'Swing'],
@@ -37,7 +49,10 @@ export function normalizePlayRow(row) {
 }
 
 export const PLAYER_SHEET_COLUMNS = {
+  team: 1,
   name: 3,
+  status: 6,
+  primary: 7,
   handedness: 9,
   batting: {
     con: 10,
@@ -46,10 +61,10 @@ export const PLAYER_SHEET_COLUMNS = {
     spd: 13,
   },
   pitching: {
-    con: 15,
-    eye: 16,
-    pow: 17,
-    spd: 18,
+    con: 14,
+    eye: 15,
+    pow: 16,
+    spd: 17,
   },
 };
 
@@ -59,6 +74,21 @@ export function getSheetCsvUrl(
 ) {
   const sheet = encodeURIComponent(sheetName);
   const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${sheet}`;
+
+  if (bustCache) {
+    return `${base}&t=${Date.now()}`;
+  }
+
+  return base;
+}
+
+export function getHistoricalPlaysCsvUrl(
+  seasonQuery,
+  { bustCache = false, spreadsheetId = HISTORICAL_PLAYS_CONFIG.spreadsheetId } = {},
+) {
+  const sheet = encodeURIComponent(HISTORICAL_PLAYS_CONFIG.sheetName);
+  const query = encodeURIComponent(seasonQuery);
+  const base = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&headers=1&sheet=${sheet}&tq=${query}`;
 
   if (bustCache) {
     return `${base}&t=${Date.now()}`;

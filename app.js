@@ -1,5 +1,19 @@
-import { SHEET_CONFIG, PLAYER_SHEET_COLUMNS, getSheetCsvUrl, normalizePlayRow } from './config.js';
+import {
+  HISTORICAL_PLAYS_CONFIG,
+  SHEET_CONFIG,
+  PLAYER_SHEET_COLUMNS,
+  getHistoricalPlaysCsvUrl,
+  getSheetCsvUrl,
+  normalizePlayRow,
+} from './config.js';
 import { buildRangeTable } from './rangeEngine.js';
+import {
+  formatTargetGameLabel,
+  getRosterNames,
+  inferSituationFromPlays,
+  parseSessionDates,
+  resolveSunTargetGame,
+} from './liveScouting.js';
 
 const PITCH_MIN = 1;
 const PITCH_MAX = 1000;
@@ -11,11 +25,29 @@ const RANGE_BAND_FILL_OPACITY = 0.25;
 const RANGE_MARKER_THICKNESS_FRACTION = 0.0625;
 const RANGE_MARKER_START_FRACTION = 1 - RANGE_MARKER_THICKNESS_FRACTION;
 const RANGE_MARKER_LINE_WIDTH = 1;
-const LAST_PITCH_COUNT = 10;
+const LIVE_SPIRAL_GAME_COUNT = 3;
+const LIVE_MATSUMOTO_SEASON_COUNT = 3;
 const SPIRAL_CANVAS_SIZE = 960;
 const SPIRAL_RENDER_SCALE = 3;
 const SPIRAL_MIN_RADIUS = 0.03;
 const SPIRAL_MAX_RADIUS = 0.88;
+const SPIRAL_GUIDE_OUTER_RADIUS = SPIRAL_MAX_RADIUS + 0.08;
+const DELTA_BAND_THICKNESS = 0.038;
+const DELTA_BAND_GAP = 0.012;
+const LIVE_PROXIMITY_PITCH_TOLERANCE = 50;
+const DELTA_BAND_INNER_RADIUS = SPIRAL_GUIDE_OUTER_RADIUS + 0.055;
+const DELTA_BAND_OUTER_RADIUS = DELTA_BAND_INNER_RADIUS + DELTA_BAND_THICKNESS;
+const DELTA_BAND_MID_RADIUS = (DELTA_BAND_INNER_RADIUS + DELTA_BAND_OUTER_RADIUS) / 2;
+const DELTA_BAND_LABEL_RADIUS = DELTA_BAND_OUTER_RADIUS + 0.016;
+const DELTA_BAND_NUMBER_RADIUS = DELTA_BAND_OUTER_RADIUS + 0.008;
+const PROXIMITY_DELTA_BAND_INNER_RADIUS = DELTA_BAND_OUTER_RADIUS + DELTA_BAND_GAP;
+const PROXIMITY_DELTA_BAND_OUTER_RADIUS = PROXIMITY_DELTA_BAND_INNER_RADIUS + DELTA_BAND_THICKNESS;
+const PROXIMITY_DELTA_BAND_MID_RADIUS = (
+  PROXIMITY_DELTA_BAND_INNER_RADIUS + PROXIMITY_DELTA_BAND_OUTER_RADIUS
+) / 2;
+const PROXIMITY_DELTA_BAND_NUMBER_RADIUS = PROXIMITY_DELTA_BAND_OUTER_RADIUS + 0.008;
+const DELTA_WHISKER_LINE_WIDTH = 1.5;
+const PROXIMITY_DELTA_BAND_COLOR = '#9a93a8';
 const RANGE_MARKER_RADIUS = SPIRAL_MAX_RADIUS + 0.012;
 const RANGE_MARKER_LABEL_RADIUS = SPIRAL_MAX_RADIUS + 0.045;
 const RANGE_LINE_NUMBER_RADIUS = RANGE_MARKER_RADIUS + 0.018;
@@ -24,10 +56,11 @@ const SPIRAL_POINT_RADIUS = 12;
 const SPIRAL_LATEST_RADIUS = 14;
 const SPIRAL_CONNECTOR_STEPS = 72;
 const SPIRAL_CONNECTOR_OPACITY = 0.36;
-const SPIRAL_TRANSITION_CONNECTOR_COLOR = 'rgba(154, 167, 181, 0.7)';
-const DELTA_CHART_WIDTH = 900;
-const DELTA_CHART_RENDER_SCALE = 2;
-const DELTA_CHART_MAX_DELTA = 500;
+const SPIRAL_TRANSITION_CONNECTOR_COLOR = 'rgba(176, 156, 196, 0.7)';
+const CHART_CANVAS_COLOR = '#161020';
+const CHART_TEXT_COLOR = '#efe8f5';
+const CHART_CANVAS_STROKE = 'rgba(16, 12, 22, 0.9)';
+const CHART_MUTED = 'rgba(176, 156, 196';
 const SPIRAL_ZOOM_MIN = 0.6;
 const SPIRAL_ZOOM_MAX = 8;
 const TWO_PI = Math.PI * 2;
@@ -44,7 +77,7 @@ const RESULT_CATEGORY_COLORS = {
   Out: '#f5a524',
   Strikeout: '#ef6b6b',
   'Home Run': '#35bfa5',
-  Other: '#9aa7b5',
+  Other: '#a895bd',
 };
 
 const DELTA_PLOT_CATEGORIES = [
@@ -72,24 +105,49 @@ const PITCHING_STAT_FIELDS = [
 
 const pitcherSelect = document.getElementById('pitcher-select');
 const batterSelect = document.getElementById('batter-select');
-const hypotheticalSwingToggle = document.getElementById('hypothetical-swing-toggle');
-const hypotheticalSwingFields = document.getElementById('hypothetical-swing-fields');
-const hypotheticalSwingInput = document.getElementById('hypothetical-swing-input');
-const simulateSwingBtn = document.getElementById('simulate-swing-btn');
-const pitchRecencySelect = document.getElementById('pitch-recency-select');
-const syncSheetBtn = document.getElementById('sync-sheet-btn');
+const liveGameContextEl = document.getElementById('live-game-context');
+const gameScoreEl = document.getElementById('game-score');
+const gameScoreTeamsEl = document.getElementById('game-score-teams');
+const situationGraphicEl = document.getElementById('situation-graphic');
+const pitcherStatsEl = document.getElementById('pitcher-stats');
+const batterStatsEl = document.getElementById('batter-stats');
 const statusEl = document.getElementById('status');
 const rowCountEl = document.getElementById('row-count');
 const chartGrid = document.getElementById('chart-grid');
-const situationPanel = document.getElementById('situation-panel');
-const matchupStackEl = document.getElementById('matchup-stack');
+
+/*
+ * LEGACY UI (removed from page, kept for reference):
+ * const scoutModeInputs = document.querySelectorAll('input[name="scout-mode"]');
+ * const hypotheticalSwingToggle = document.getElementById('hypothetical-swing-toggle');
+ * const hypotheticalSwingFields = document.getElementById('hypothetical-swing-fields');
+ * const hypotheticalSwingInput = document.getElementById('hypothetical-swing-input');
+ * const simulateSwingBtn = document.getElementById('simulate-swing-btn');
+ * const pitchRecencySelect = document.getElementById('pitch-recency-select');
+ * const recencyControlEl = document.querySelector('.control-group--recency');
+ * const syncSheetBtn = document.getElementById('sync-sheet-btn');
+ * const situationPanel = document.getElementById('situation-panel');
+ * const matchupStackEl = document.getElementById('matchup-stack');
+ */
 
 let allRows = [];
+let historicalRows = [];
+let allGames = [];
+let sessionDates = [];
+let liveTargetGame = null;
 let playerStatsByName = new Map();
 let isLoadingSheet = false;
-let simulatedHypotheticalSwing = null;
 let spiralRedraw = null;
 let lastSelectedPitcher = '';
+let inferredSituation = null;
+
+function isLiveScoutingMode() {
+  return true;
+}
+
+/*
+ * LEGACY: speculation mode toggle
+ * function getSelectedScoutMode() { ... }
+ */
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
@@ -106,9 +164,6 @@ function formatSyncTime(date) {
 
 function setSyncLoading(loading) {
   isLoadingSheet = loading;
-  syncSheetBtn.disabled = loading;
-  syncSheetBtn.setAttribute('aria-busy', loading ? 'true' : 'false');
-  syncSheetBtn.textContent = loading ? 'Syncing…' : 'Sync';
 }
 
 function parseCsv(text) {
@@ -175,6 +230,37 @@ function rowsToObjects(matrix) {
   });
 }
 
+function resolvePlaysHeaderRowIndex(matrix) {
+  if (matrix.length < 2) {
+    return 0;
+  }
+
+  const candidate = matrix[1].map((cell) => cell.trim().toLowerCase());
+
+  if (candidate.includes('game') && candidate.includes('pitcher') && candidate.includes('play')) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function parsePlaysMatrix(matrix) {
+  if (matrix.length === 0) {
+    return [];
+  }
+
+  const headerIndex = resolvePlaysHeaderRowIndex(matrix);
+  const headers = matrix[headerIndex];
+
+  return matrix.slice(headerIndex + 1).map((cells) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      record[header] = cells[index] ?? '';
+    });
+    return record;
+  });
+}
+
 function populateSelect(selectEl, values, { previousValue = '', defaultValue = '' } = {}) {
   selectEl.replaceChildren();
 
@@ -207,8 +293,150 @@ function getUniquePitchers(rows) {
   return [...pitchers].sort((a, b) => a.localeCompare(b));
 }
 
-function populatePitcherDropdown(pitchers) {
-  populateSelect(pitcherSelect, pitchers, { previousValue: pitcherSelect.value });
+function populatePitcherDropdown(pitchers, pitcherRows = []) {
+  populateSelect(pitcherSelect, pitchers, {
+    previousValue: pitcherSelect.value,
+    defaultValue: isLiveScoutingMode()
+      ? getDefaultLivePitcher(pitchers)
+      : '',
+  });
+}
+
+function getDefaultLivePitcher(pitchers) {
+  const gameNumber = String(liveTargetGame?.game?.['Game#'] ?? '').trim();
+  if (!gameNumber) {
+    return pitchers[0] ?? '';
+  }
+
+  const gamePitchers = [...new Set(
+    allRows
+      .filter((row) => String(row.Game ?? '').trim() === gameNumber)
+      .map((row) => row.Pitcher?.trim())
+      .filter(Boolean),
+  )];
+
+  return gamePitchers.find((name) => pitchers.includes(name))
+    ?? pitchers[0]
+    ?? '';
+}
+
+function getDefaultLiveBatter(batters, pitcherRows) {
+  const recent = getMostRecentBatter(pitcherRows);
+  if (recent && batters.includes(recent)) {
+    return recent;
+  }
+
+  const gameNumber = String(liveTargetGame?.game?.['Game#'] ?? '').trim();
+  if (gameNumber) {
+    const gameBatters = [...new Set(
+      allRows
+        .filter((row) => String(row.Game ?? '').trim() === gameNumber)
+        .map((row) => row.Batter?.trim())
+        .filter(Boolean),
+    )];
+
+    return gameBatters.find((name) => batters.includes(name))
+      ?? batters[0]
+      ?? '';
+  }
+
+  return batters[0] ?? '';
+}
+
+function getSpeculationPitchers() {
+  return getUniquePitchers(allRows);
+}
+
+function getLiveScoutingPitchers() {
+  if (!liveTargetGame?.opponentTeam) {
+    return [];
+  }
+
+  const opponentPitchers = getRosterNames(playerStatsByName, {
+    team: liveTargetGame.opponentTeam,
+    role: 'pitcher',
+  });
+
+  if (opponentPitchers.length > 0) {
+    return opponentPitchers;
+  }
+
+  return getUniquePitchers(allRows).filter((pitcher) => {
+    const player = playerStatsByName.get(pitcher);
+    return player?.team === liveTargetGame.opponentTeam && player?.primary === 'P';
+  });
+}
+
+function getSpeculationBatters() {
+  return getAllBatters();
+}
+
+function getLiveScoutingBatters() {
+  return getRosterNames(playerStatsByName, {
+    team: SHEET_CONFIG.scoutTeamAbv,
+    role: 'all',
+  });
+}
+
+function refreshLiveTargetGame() {
+  liveTargetGame = resolveSunTargetGame({
+    sessions: sessionDates,
+    games: allGames,
+    playRows: allRows,
+    scoutTeam: SHEET_CONFIG.scoutTeamAbv,
+  });
+}
+
+function updateLiveGameContext() {
+  if (!liveGameContextEl) {
+    return;
+  }
+
+  liveGameContextEl.textContent = formatTargetGameLabel(
+    liveTargetGame,
+    SHEET_CONFIG.scoutTeamAbv,
+  );
+}
+
+function updateGameScore() {
+  const game = liveTargetGame?.game;
+
+  if (!gameScoreEl) {
+    return;
+  }
+
+  if (!game) {
+    gameScoreEl.textContent = '—';
+    if (gameScoreTeamsEl) {
+      gameScoreTeamsEl.textContent = '';
+    }
+    return;
+  }
+
+  const away = String(game.Away ?? '').trim();
+  const home = String(game.Home ?? '').trim();
+  const awayScore = String(game.a_Scr ?? '').trim() || '0';
+  const homeScore = String(game.h_Scr ?? '').trim() || '0';
+
+  gameScoreEl.textContent = `${awayScore}–${homeScore}`;
+  if (gameScoreTeamsEl) {
+    gameScoreTeamsEl.textContent = `${away} @ ${home}`;
+  }
+}
+
+function updateHeroStatus() {
+  inferredSituation = getInferredLiveSituation();
+  updateGameScore();
+  updateLiveGameContext();
+  renderInferredSituationGraphic(inferredSituation, situationGraphicEl);
+}
+
+function getAvailablePitchers() {
+  return getLiveScoutingPitchers();
+}
+
+function getAvailableBatters() {
+  return getLiveScoutingBatters();
 }
 
 function getAllBatters() {
@@ -236,7 +464,9 @@ function getMostRecentBatter(rows) {
 function populateBatterDropdown(batters, pitcherRows) {
   populateSelect(batterSelect, batters, {
     previousValue: batterSelect.value,
-    defaultValue: getMostRecentBatter(pitcherRows),
+    defaultValue: isLiveScoutingMode()
+      ? getDefaultLiveBatter(batters, pitcherRows)
+      : getMostRecentBatter(pitcherRows),
   });
 }
 
@@ -257,60 +487,16 @@ function parseSwingNumber(value) {
   return swingNumber;
 }
 
-function setHypotheticalSwingFieldsVisible(isVisible) {
-  hypotheticalSwingFields.hidden = !isVisible;
-}
-
-function clearSimulatedHypotheticalSwing() {
-  simulatedHypotheticalSwing = null;
-  spiralRedraw?.();
-}
-
-function sanitizeHypotheticalSwingInput() {
-  if (!hypotheticalSwingInput.value.trim()) {
-    hypotheticalSwingInput.setCustomValidity('');
-    return;
+function getCombinedRangeMedianPitch(forwardDeltaOverlay, proximityDeltaOverlay) {
+  if (!forwardDeltaOverlay || !proximityDeltaOverlay) {
+    return null;
   }
 
-  const parsed = parseSwingNumber(hypotheticalSwingInput.value);
-  if (parsed === null) {
-    hypotheticalSwingInput.setCustomValidity('Enter a whole number from 0 to 1000.');
-    return;
-  }
+  const avgDelta = (
+    forwardDeltaOverlay.stats.median + proximityDeltaOverlay.stats.median
+  ) / 2;
 
-  hypotheticalSwingInput.setCustomValidity('');
-  if (hypotheticalSwingInput.value !== String(parsed)) {
-    hypotheticalSwingInput.value = String(parsed);
-  }
-}
-
-function handleHypotheticalSwingToggle() {
-  const isEnabled = hypotheticalSwingToggle.checked;
-  setHypotheticalSwingFieldsVisible(isEnabled);
-
-  if (!isEnabled) {
-    clearSimulatedHypotheticalSwing();
-  }
-
-  updateDashboard();
-}
-
-function handleSimulateSwing() {
-  sanitizeHypotheticalSwingInput();
-  if (!hypotheticalSwingInput.reportValidity()) {
-    return;
-  }
-
-  const swingNumber = parseSwingNumber(hypotheticalSwingInput.value);
-  if (swingNumber === null) {
-    hypotheticalSwingInput.setCustomValidity('Enter a whole number from 0 to 1000.');
-    hypotheticalSwingInput.reportValidity();
-    return;
-  }
-
-  simulatedHypotheticalSwing = swingNumber;
-  spiralRedraw?.();
-  updateDashboard();
+  return pitchFromDisplayDelta(forwardDeltaOverlay.anchorPitch, avgDelta);
 }
 
 function parsePitchNumber(row) {
@@ -335,41 +521,6 @@ function normalizePitchNumber(value) {
   return ((value % mod) + mod) % mod;
 }
 
-function getActiveSimulatedSwing() {
-  if (!hypotheticalSwingToggle.checked) {
-    return null;
-  }
-
-  if (simulatedHypotheticalSwing !== null) {
-    return simulatedHypotheticalSwing;
-  }
-
-  return parseSwingNumber(hypotheticalSwingInput.value);
-}
-
-function formatRangeBounds(row, simulatedSwing) {
-  const { high, result } = row;
-
-  if (result === 'K') {
-    return {
-      down: '—',
-      up: '—',
-    };
-  }
-
-  if (simulatedSwing === null) {
-    return {
-      down: `-${high}>`,
-      up: `<${high}`,
-    };
-  }
-
-  return {
-    down: String(normalizePitchNumber(simulatedSwing - high)),
-    up: String(normalizePitchNumber(simulatedSwing + high)),
-  };
-}
-
 function hexToRgba(hex, alpha) {
   const normalized = hex.replace('#', '');
   const red = Number.parseInt(normalized.slice(0, 2), 16);
@@ -377,6 +528,13 @@ function hexToRgba(hex, alpha) {
   const blue = Number.parseInt(normalized.slice(4, 6), 16);
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }
+
+/*
+ * LEGACY: range table
+ * function buildMatchupRangeTable(pitcherName, batterName) { ... }
+ * function formatRangeBounds(row, simulatedSwing) { ... }
+ * function renderRangeTableCard(pitcherName, batterName) { ... }
+ */
 
 function buildMatchupRangeTable(pitcherName, batterName) {
   const pitcher = playerStatsByName.get(pitcherName);
@@ -520,14 +678,176 @@ function getChronologicalPitchRows(rows) {
 }
 
 function getPitchRecencyLimit() {
-  const value = pitchRecencySelect?.value ?? '20';
-  if (value === 'all') {
+  return null;
+}
+
+function getMatsumotoSeasons() {
+  const seasons = [];
+
+  for (
+    let season = HISTORICAL_PLAYS_CONFIG.minSeason;
+    season <= HISTORICAL_PLAYS_CONFIG.maxSeason;
+    season += 1
+  ) {
+    seasons.push(season);
+  }
+
+  return seasons;
+}
+
+function buildHistoricalSeasonQuery() {
+  const { minSeason, maxSeason } = HISTORICAL_PLAYS_CONFIG;
+  return `select * where A >= ${minSeason} and A <= ${maxSeason}`;
+}
+
+function isPlaysDataMatrix(matrix) {
+  if (matrix.length < 2) {
+    return false;
+  }
+
+  const headers = matrix[0].map((header) => header.trim().toLowerCase());
+  return headers.includes('game')
+    && headers.includes('pitcher')
+    && headers.includes('play');
+}
+
+function dedupePlayRowsByGamePlay(rows, { preferLast = true } = {}) {
+  const seen = new Map();
+
+  rows.forEach((row) => {
+    const game = String(row.Game ?? '').trim();
+    const play = String(row.Play ?? '').trim();
+
+    if (!game || !play) {
+      return;
+    }
+
+    const key = `${game}|${play}`;
+
+    if (!preferLast && seen.has(key)) {
+      return;
+    }
+
+    seen.set(key, row);
+  });
+
+  return [...seen.values()];
+}
+
+function getPitcherRowsForMatsumoto(pitcherName) {
+  const archiveRows = filterRowsByPitcher(historicalRows, pitcherName);
+  const currentRows = filterRowsByPitcher(allRows, pitcherName);
+  return dedupePlayRowsByGamePlay([...archiveRows, ...currentRows]);
+}
+
+function getPitcherDisplayRows(pitcherName) {
+  const seasonSet = new Set(getMatsumotoSeasons());
+
+  return getPitcherRowsForMatsumoto(pitcherName).filter((row) => {
+    const season = parseGameSeason(row.Game);
+    return season !== null && seasonSet.has(season);
+  });
+}
+
+async function loadHistoricalPlays(forceRefresh = false) {
+  const seasonQuery = buildHistoricalSeasonQuery();
+
+  try {
+    const response = await fetch(getHistoricalPlaysCsvUrl(seasonQuery, { bustCache: forceRefresh }), {
+      cache: forceRefresh ? 'no-store' : 'default',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Historical plays request failed (${response.status})`);
+    }
+
+    const matrix = parseCsv(await response.text());
+
+    if (!isPlaysDataMatrix(matrix)) {
+      return [];
+    }
+
+    return rowsToObjects(matrix).map(normalizePlayRow);
+  } catch (error) {
+    console.warn('Historical plays unavailable', error);
+    return [];
+  }
+}
+
+function parseGameSeason(gameId) {
+  const game = String(gameId ?? '').trim();
+  if (game.length < 2) {
     return null;
   }
 
-  const limit = Number.parseInt(value, 10);
-  return Number.isFinite(limit) ? limit : 20;
+  const season = Number.parseInt(game.slice(0, 2), 10);
+  return Number.isFinite(season) ? season : null;
 }
+
+function getRecentGameIds(rows, count = LIVE_SPIRAL_GAME_COUNT) {
+  const games = new Map();
+
+  rows.forEach((row) => {
+    const game = String(row.Game ?? '').trim();
+    const playOrder = parsePlayOrder(row);
+    if (!game || playOrder === null) {
+      return;
+    }
+
+    const existing = games.get(game);
+    if (!existing || playOrder > existing.maxPlay) {
+      games.set(game, { game, maxPlay: playOrder });
+    }
+  });
+
+  return [...games.values()]
+    .sort((a, b) => a.maxPlay - b.maxPlay)
+    .slice(-count)
+    .map((entry) => entry.game);
+}
+
+function getRecentSeasons(rows, count = LIVE_MATSUMOTO_SEASON_COUNT) {
+  const seasons = new Set();
+
+  rows.forEach((row) => {
+    const season = parseGameSeason(row.Game);
+    if (season !== null) {
+      seasons.add(season);
+    }
+  });
+
+  return [...seasons].sort((a, b) => a - b).slice(-count);
+}
+
+function filterChronologicalPitchRowsByGames(pitchRows, gameIds) {
+  const gameSet = new Set(gameIds);
+  return pitchRows.filter((entry) => gameSet.has(String(entry.row.Game ?? '').trim()));
+}
+
+function filterChronologicalPitchRowsBySeasons(pitchRows, seasons) {
+  const seasonSet = new Set(seasons);
+  return pitchRows.filter((entry) => {
+    const season = parseGameSeason(entry.row.Game);
+    return season !== null && seasonSet.has(season);
+  });
+}
+
+function getSpiralPitchRows(pitcherRows) {
+  const pitchRows = getChronologicalPitchRows(pitcherRows);
+  const recentGames = getRecentGameIds(pitcherRows, LIVE_SPIRAL_GAME_COUNT);
+  return filterChronologicalPitchRowsByGames(pitchRows, recentGames);
+}
+
+function getMatsumotoPitchRows(pitcherRows) {
+  const pitchRows = getChronologicalPitchRows(pitcherRows);
+  return filterChronologicalPitchRowsBySeasons(pitchRows, getMatsumotoSeasons());
+}
+
+/*
+ * LEGACY: recency dropdown / speculation chart windows
+ * function updateLiveModeControls() { ... }
+ * function getRecentChronologicalPitchRows(rows) { ... pitch count limit ... }
+ */
 
 function getRecentChronologicalPitchRows(rows) {
   const pitchRows = getChronologicalPitchRows(rows);
@@ -686,6 +1006,9 @@ function buildPlayerStatsFromRow(cells) {
 
   return {
     name: cells[PLAYER_SHEET_COLUMNS.name]?.trim() || '',
+    team: cells[PLAYER_SHEET_COLUMNS.team]?.trim() || '',
+    status: cells[PLAYER_SHEET_COLUMNS.status]?.trim() || '',
+    primary: cells[PLAYER_SHEET_COLUMNS.primary]?.trim() || '',
     handedness: cells[PLAYER_SHEET_COLUMNS.handedness]?.trim() || '',
     batting: readGroup(PLAYER_SHEET_COLUMNS.batting),
     pitching: readGroup(PLAYER_SHEET_COLUMNS.pitching),
@@ -733,6 +1056,73 @@ function getPlayerStatBlock(player, statGroup) {
   };
 }
 
+function appendStatCells(container, stats, statFields) {
+  const row = document.createElement('div');
+  row.className = 'matchup-stat-row matchup-stat-row--cells-only';
+
+  const cells = document.createElement('div');
+  cells.className = 'matchup-stat-row__cells';
+
+  statFields.forEach(({ key, label }) => {
+    const cell = document.createElement('div');
+    cell.className = 'matchup-stat-cell';
+
+    const statLabel = document.createElement('span');
+    statLabel.className = 'matchup-stat-cell__label';
+    statLabel.textContent = label;
+
+    const statValue = document.createElement('span');
+    statValue.className = 'matchup-stat-cell__value';
+    statValue.textContent = stats?.[key] || '—';
+
+    cell.append(statLabel, statValue);
+    cells.appendChild(cell);
+  });
+
+  row.appendChild(cells);
+  container.appendChild(row);
+}
+
+/*
+ * LEGACY: last-10 pitches table
+ * function renderLastTenPitchesTable(rows) { ... }
+ */
+
+function appendStatRowHorizontal(container, title, stats, statFields) {
+  const row = document.createElement('div');
+  row.className = 'matchup-stat-row';
+
+  const heading = document.createElement('h3');
+  heading.className = 'matchup-stat-row__title';
+  heading.textContent = title;
+
+  const cells = document.createElement('div');
+  cells.className = 'matchup-stat-row__cells';
+
+  statFields.forEach(({ key, label }) => {
+    const cell = document.createElement('div');
+    cell.className = 'matchup-stat-cell';
+
+    const statLabel = document.createElement('span');
+    statLabel.className = 'matchup-stat-cell__label';
+    statLabel.textContent = label;
+
+    const statValue = document.createElement('span');
+    statValue.className = 'matchup-stat-cell__value';
+    statValue.textContent = stats?.[key] || '—';
+
+    cell.append(statLabel, statValue);
+    cells.appendChild(cell);
+  });
+
+  row.append(heading, cells);
+  container.appendChild(row);
+}
+
+/*
+ * LEGACY: vertical stat columns
+ * function appendStatColumn(container, title, stats, statFields) { ... }
+ */
 function appendStatColumn(container, title, stats, statFields) {
   const column = document.createElement('div');
   column.className = 'matchup-column';
@@ -779,118 +1169,33 @@ function createChartCard(title, description) {
   return card;
 }
 
-function renderLastTenPitchesTable(rows) {
-  const card = createChartCard(
-    'Last 10 pitches',
-    'Most recent pitches first, in chronological order.',
-  );
-  card.classList.add('chart-card--table', 'chart-card--pitches');
+function renderMatchupStatsInline(pitcherName, batterName) {
+  pitcherStatsEl?.replaceChildren();
+  batterStatsEl?.replaceChildren();
 
-  const pitchRows = getChronologicalPitchRows(rows)
-    .sort((a, b) => b.playOrder - a.playOrder)
-    .slice(0, LAST_PITCH_COUNT);
-
-  if (pitchRows.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'empty-state';
-    empty.textContent = 'No pitch data for this pitcher.';
-    card.appendChild(empty);
-    return card;
+  if (pitcherName && pitcherStatsEl) {
+    const pitcher = playerStatsByName.get(pitcherName);
+    appendStatCells(
+      pitcherStatsEl,
+      getPlayerStatBlock(pitcher, 'pitching'),
+      PITCHING_STAT_FIELDS,
+    );
   }
 
-  const tableWrap = document.createElement('div');
-  tableWrap.className = 'table-wrap';
-
-  const table = document.createElement('table');
-  table.className = 'pitch-table';
-
-  const columns = [
-    { key: 'Pitch #', label: 'Pitch' },
-    { key: 'delta', label: 'Δ' },
-    { key: 'rotation', label: 'Dir' },
-    { key: 'Swing #', label: 'Swing' },
-    { key: 'Result', label: 'Result' },
-    { key: 'Batter', label: 'Batter' },
-    { key: 'Inning', label: 'Inning' },
-  ];
-
-  const thead = document.createElement('thead');
-  const headerRow = document.createElement('tr');
-  columns.forEach(({ label }) => {
-    const th = document.createElement('th');
-    th.scope = 'col';
-    th.textContent = label;
-    headerRow.appendChild(th);
-  });
-  thead.appendChild(headerRow);
-
-  const tbody = document.createElement('tbody');
-  pitchRows.forEach((entry, index) => {
-    const previousEntry = pitchRows[index + 1];
-    const travelDelta = previousEntry
-      ? getPitchTravelDelta(previousEntry.pitchNumber, entry.pitchNumber)
-      : null;
-    const rotation = previousEntry
-      ? getPitchRotationDirection(previousEntry.pitchNumber, entry.pitchNumber)
-      : '—';
-
-    const tr = document.createElement('tr');
-    columns.forEach(({ key }) => {
-      const td = document.createElement('td');
-      if (key === 'delta') {
-        td.textContent = travelDelta === null ? '—' : String(travelDelta);
-      } else if (key === 'rotation') {
-        td.textContent = rotation;
-        if (rotation === '↻') {
-          td.title = 'Clockwise';
-          td.setAttribute('aria-label', 'Clockwise');
-        } else if (rotation === '↺') {
-          td.title = 'Counter-clockwise';
-          td.setAttribute('aria-label', 'Counter-clockwise');
-        }
-      } else {
-        td.textContent = entry.row[key]?.trim() || '—';
-      }
-      tr.appendChild(td);
-    });
-    tbody.appendChild(tr);
-  });
-
-  table.append(thead, tbody);
-  tableWrap.appendChild(table);
-  card.appendChild(tableWrap);
-  return card;
+  if (batterName && batterStatsEl) {
+    const batter = playerStatsByName.get(batterName);
+    appendStatCells(
+      batterStatsEl,
+      getPlayerStatBlock(batter, 'batting'),
+      BATTING_STAT_FIELDS,
+    );
+  }
 }
 
-function renderMatchup(pitcherName, batterName) {
-  const card = createChartCard('Matchup', '');
-  card.classList.add('chart-card--stats');
-
-  const caption = card.querySelector('.chart-caption');
-  if (caption) {
-    caption.remove();
-  }
-
-  const pitcher = playerStatsByName.get(pitcherName);
-  const batter = playerStatsByName.get(batterName);
-
-  if (!pitcherName && !batterName) {
-    const empty = document.createElement('p');
-    empty.className = 'empty-state';
-    empty.textContent = 'Select a pitcher and batter.';
-    card.appendChild(empty);
-    return card;
-  }
-
-  const matchup = document.createElement('div');
-  matchup.className = 'matchup-stats';
-
-  appendStatColumn(matchup, 'Pitcher', getPlayerStatBlock(pitcher, 'pitching'), PITCHING_STAT_FIELDS);
-  appendStatColumn(matchup, 'Batter', getPlayerStatBlock(batter, 'batting'), BATTING_STAT_FIELDS);
-
-  card.appendChild(matchup);
-  return card;
-}
+/*
+ * LEGACY: matchup card with embedded situation graphic
+ * function renderMatchup(pitcherName, batterName) { ... }
+ */
 
 function pitchNumberToAngle(pitchNumber) {
   return (pitchNumber / PITCH_MAX) * TWO_PI;
@@ -922,112 +1227,6 @@ function getPitchRotationDirection(fromPitch, toPitch) {
   return delta > 0 ? '↻' : '↺';
 }
 
-function formatDeltaMagnitudeLabel(signedDelta) {
-  return String(Math.abs(signedDelta));
-}
-
-const DELTA_BOX_LABEL_INSET = 5;
-
-function buildInsideBoxLabels(stats, plotLeft, plotWidth) {
-  const q1X = signedDeltaToPlotX(stats.q1, plotLeft, plotWidth);
-  const q3X = signedDeltaToPlotX(stats.q3, plotLeft, plotWidth);
-
-  return [
-    { x: q1X + DELTA_BOX_LABEL_INSET, value: stats.q1, textAlign: 'left' },
-    { x: q3X - DELTA_BOX_LABEL_INSET, value: stats.q3, textAlign: 'right' },
-  ];
-}
-
-function buildGapLabels(stats, plotLeft, plotWidth) {
-  const minX = signedDeltaToPlotX(stats.min, plotLeft, plotWidth);
-  const medianX = signedDeltaToPlotX(stats.median, plotLeft, plotWidth);
-  const maxX = signedDeltaToPlotX(stats.max, plotLeft, plotWidth);
-
-  const labels = [
-    { x: minX, value: stats.min, textAlign: 'center' },
-    { x: medianX, value: stats.median, textAlign: 'center' },
-    { x: maxX, value: stats.max, textAlign: 'center' },
-  ];
-
-  const visible = [];
-
-  labels.forEach((label) => {
-    const text = formatDeltaMagnitudeLabel(label.value);
-    const overlaps = visible.some(
-      (existing) =>
-        formatDeltaMagnitudeLabel(existing.value) === text &&
-        Math.abs(existing.x - label.x) < 16,
-    );
-
-    if (!overlaps) {
-      visible.push(label);
-    }
-  });
-
-  return visible;
-}
-
-function drawDeltaStatLabels(context, labels, y, color, stroke = false) {
-  context.font = '600 10px "Segoe UI", system-ui, sans-serif';
-  context.textBaseline = 'middle';
-  context.fillStyle = color;
-
-  labels.forEach(({ x, value, textAlign }) => {
-    const text = formatDeltaMagnitudeLabel(value);
-
-    context.textAlign = textAlign;
-
-    if (stroke) {
-      context.lineWidth = 3;
-      context.strokeStyle = '#121820';
-      context.strokeText(text, x, y);
-    }
-
-    context.fillText(text, x, y);
-  });
-}
-
-function signedDeltaToPlotX(signedDelta, plotLeft, plotWidth) {
-  const clamped = Math.max(-DELTA_CHART_MAX_DELTA, Math.min(DELTA_CHART_MAX_DELTA, signedDelta));
-
-  return plotLeft + ((clamped + DELTA_CHART_MAX_DELTA) / (DELTA_CHART_MAX_DELTA * 2)) * plotWidth;
-}
-
-function buildHorizontalBandLayout() {
-  return {
-    bandHeight: 40,
-    bandGap: 40,
-    outerGap: 40,
-    innerGap: 14,
-    axisArea: 42,
-    marginLeft: 54,
-    marginRight: 28,
-    marginTop: 8,
-  };
-}
-
-function computeDeltaChartHeight(layout) {
-  const categoryCount = DELTA_PLOT_CATEGORIES.length;
-
-  return (
-    layout.marginTop +
-    layout.outerGap +
-    categoryCount * layout.bandHeight +
-    (categoryCount - 1) * layout.bandGap +
-    layout.innerGap +
-    layout.axisArea
-  );
-}
-
-function getCategoryBandBounds(layout, axisY, index) {
-  const bandBottom = axisY - layout.innerGap - index * (layout.bandHeight + layout.bandGap);
-  const bandTop = bandBottom - layout.bandHeight;
-  const gapSize = index === DELTA_PLOT_CATEGORIES.length - 1 ? layout.outerGap : layout.bandGap;
-  const labelY = bandTop - gapSize / 2;
-
-  return { bandTop, bandBottom, labelY };
-}
-
 function computeBoxPlotStats(values) {
   if (values.length === 0) {
     return null;
@@ -1055,228 +1254,403 @@ function computeBoxPlotStats(values) {
   };
 }
 
-function buildPitchDeltaTransitions(pitchRows) {
-  const chronological = [...pitchRows].sort((a, b) => a.playOrder - b.playOrder);
-  const transitions = [];
+function getDeltaPlotCategoryMeta(category) {
+  return DELTA_PLOT_CATEGORIES.find((entry) => entry.key === category) ?? null;
+}
 
-  for (let index = 1; index < chronological.length; index += 1) {
-    const previous = chronological[index - 1];
-    const current = chronological[index];
-    const signedDelta = getShortestPitchDelta(previous.pitchNumber, current.pitchNumber);
-    const category = normalizeResultCategory(current.row.Result?.trim() || '');
+function getPrimaryDeltaBandGeometry() {
+  return {
+    innerRadiusFraction: DELTA_BAND_INNER_RADIUS,
+    outerRadiusFraction: DELTA_BAND_OUTER_RADIUS,
+    midRadiusFraction: DELTA_BAND_MID_RADIUS,
+    numberRadiusFraction: DELTA_BAND_NUMBER_RADIUS,
+  };
+}
 
-    if (!DELTA_PLOT_CATEGORIES.some((entry) => entry.key === category)) {
+function getProximityDeltaBandGeometry() {
+  return {
+    innerRadiusFraction: PROXIMITY_DELTA_BAND_INNER_RADIUS,
+    outerRadiusFraction: PROXIMITY_DELTA_BAND_OUTER_RADIUS,
+    midRadiusFraction: PROXIMITY_DELTA_BAND_MID_RADIUS,
+    numberRadiusFraction: PROXIMITY_DELTA_BAND_NUMBER_RADIUS,
+  };
+}
+
+function collectForwardPitchDeltas(chronologicalRows, options = {}) {
+  const {
+    targetCategory = null,
+    anchorPitch = null,
+    proximityTolerance = null,
+  } = options;
+  const deltas = [];
+
+  for (let index = 0; index < chronologicalRows.length - 1; index += 1) {
+    const current = chronologicalRows[index];
+
+    if (
+      targetCategory !== null
+      && normalizeResultCategory(current.row.Result) !== targetCategory
+    ) {
       continue;
     }
 
-    transitions.push({
-      signedDelta,
-      category,
-      pitchNumber: current.pitchNumber,
+    if (
+      proximityTolerance !== null
+      && anchorPitch !== null
+      && getPitchTravelDelta(current.pitchNumber, anchorPitch) > proximityTolerance
+    ) {
+      continue;
+    }
+
+    const next = chronologicalRows[index + 1];
+    deltas.push(getShortestPitchDelta(current.pitchNumber, next.pitchNumber));
+  }
+
+  return deltas;
+}
+
+function pitchFromDisplayDelta(anchorPitch, signedDelta) {
+  let pitch = anchorPitch + signedDelta;
+  pitch = ((pitch % PITCH_MAX) + PITCH_MAX) % PITCH_MAX;
+
+  if (pitch === 0) {
+    pitch = PITCH_MAX;
+  }
+
+  return pitch;
+}
+
+function interpolateDisplayDelta(fromDelta, toDelta, progress) {
+  return fromDelta + (toDelta - fromDelta) * progress;
+}
+
+function drawOuterAnnularBandByDelta(
+  context,
+  center,
+  maxRadius,
+  anchorPitch,
+  deltaA,
+  deltaB,
+  innerRadiusFraction,
+  outerRadiusFraction,
+  fillColor,
+) {
+  const steps = Math.max(4, Math.ceil(Math.abs(deltaB - deltaA) / 8));
+
+  context.fillStyle = fillColor;
+  context.beginPath();
+
+  for (let step = 0; step <= steps; step += 1) {
+    const delta = interpolateDisplayDelta(deltaA, deltaB, step / steps);
+    const pitchNumber = pitchFromDisplayDelta(anchorPitch, delta);
+    const point = polarToCanvas(
+      pitchNumberToAngle(pitchNumber),
+      outerRadiusFraction,
+      center,
+      maxRadius,
+    );
+
+    if (step === 0) {
+      context.moveTo(point.x, point.y);
+    } else {
+      context.lineTo(point.x, point.y);
+    }
+  }
+
+  for (let step = steps; step >= 0; step -= 1) {
+    const delta = interpolateDisplayDelta(deltaA, deltaB, step / steps);
+    const pitchNumber = pitchFromDisplayDelta(anchorPitch, delta);
+    const point = polarToCanvas(
+      pitchNumberToAngle(pitchNumber),
+      innerRadiusFraction,
+      center,
+      maxRadius,
+    );
+    context.lineTo(point.x, point.y);
+  }
+
+  context.closePath();
+  context.fill();
+}
+
+function drawOuterPitchArcStrokeByDelta(
+  context,
+  center,
+  maxRadius,
+  anchorPitch,
+  deltaA,
+  deltaB,
+  radiusFraction,
+  strokeStyle,
+  lineWidth,
+) {
+  const steps = Math.max(4, Math.ceil(Math.abs(deltaB - deltaA) / 8));
+
+  context.save();
+  context.strokeStyle = strokeStyle;
+  context.lineWidth = lineWidth;
+  context.lineCap = 'round';
+  context.beginPath();
+
+  for (let step = 0; step <= steps; step += 1) {
+    const delta = interpolateDisplayDelta(deltaA, deltaB, step / steps);
+    const pitchNumber = pitchFromDisplayDelta(anchorPitch, delta);
+    const point = polarToCanvas(
+      pitchNumberToAngle(pitchNumber),
+      radiusFraction,
+      center,
+      maxRadius,
+    );
+
+    if (step === 0) {
+      context.moveTo(point.x, point.y);
+    } else {
+      context.lineTo(point.x, point.y);
+    }
+  }
+
+  context.stroke();
+  context.restore();
+}
+
+function drawDeltaBandBoundaryTick(
+  context,
+  center,
+  maxRadius,
+  pitchNumber,
+  color,
+  options = {},
+) {
+  const {
+    lineWidth = 1,
+    showPitchNumber = true,
+    innerRadiusFraction = DELTA_BAND_INNER_RADIUS,
+    outerRadiusFraction = DELTA_BAND_OUTER_RADIUS,
+    numberRadiusFraction = DELTA_BAND_NUMBER_RADIUS,
+  } = options;
+  const angle = pitchNumberToAngle(pitchNumber);
+  const start = polarToCanvas(angle, innerRadiusFraction, center, maxRadius);
+  const end = polarToCanvas(angle, outerRadiusFraction, center, maxRadius);
+
+  context.strokeStyle = color;
+  context.lineWidth = lineWidth;
+  context.beginPath();
+  context.moveTo(start.x, start.y);
+  context.lineTo(end.x, end.y);
+  context.stroke();
+
+  if (!showPitchNumber) {
+    return pitchNumber;
+  }
+
+  const numberPoint = polarToCanvas(angle, numberRadiusFraction, center, maxRadius);
+  context.fillStyle = color;
+  context.font = '600 7px "Segoe UI", system-ui, sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText(String(pitchNumber), numberPoint.x, numberPoint.y);
+
+  return pitchNumber;
+}
+
+function buildSpiralDeltaOverlay(pitcherRows, spiralPitchRows, options = {}) {
+  const {
+    proximityTolerance = null,
+    filterByCategory = true,
+    scopeLabel = 'category',
+    bandGeometry = getPrimaryDeltaBandGeometry(),
+  } = options;
+  const spiralChronological = [...spiralPitchRows].sort((a, b) => a.playOrder - b.playOrder);
+
+  if (spiralChronological.length === 0) {
+    return null;
+  }
+
+  const latest = spiralChronological[spiralChronological.length - 1];
+  const anchorPitch = latest.pitchNumber;
+  let category = null;
+  let categoryLabel = 'any result';
+  let latestResult = '';
+
+  if (filterByCategory) {
+    latestResult = latest.row.Result?.trim() || '';
+
+    if (!latestResult) {
+      return null;
+    }
+
+    category = normalizeResultCategory(latestResult);
+
+    if (category === 'Other') {
+      return null;
+    }
+
+    categoryLabel = getDeltaPlotCategoryMeta(category)?.label ?? category;
+  }
+
+  const historyRows = getMatsumotoPitchRows(pitcherRows);
+  const historyChronological = [...historyRows].sort((a, b) => a.playOrder - b.playOrder);
+  const forwardDeltas = collectForwardPitchDeltas(historyChronological, {
+    targetCategory: filterByCategory ? category : null,
+    anchorPitch: proximityTolerance === null ? null : anchorPitch,
+    proximityTolerance,
+  });
+
+  if (forwardDeltas.length === 0) {
+    return null;
+  }
+
+  const stats = computeBoxPlotStats(forwardDeltas);
+
+  if (!stats) {
+    return null;
+  }
+
+  const pitchAtDelta = (delta) => pitchFromDisplayDelta(anchorPitch, delta);
+
+  return {
+    anchorPitch,
+    stats,
+    minPitch: pitchAtDelta(stats.min),
+    q1Pitch: pitchAtDelta(stats.q1),
+    medianPitch: pitchAtDelta(stats.median),
+    q3Pitch: pitchAtDelta(stats.q3),
+    maxPitch: pitchAtDelta(stats.max),
+    latestResult,
+    category,
+    categoryLabel,
+    color: filterByCategory
+      ? (RESULT_CATEGORY_COLORS[category] ?? RESULT_CATEGORY_COLORS.Other)
+      : PROXIMITY_DELTA_BAND_COLOR,
+    sampleCount: forwardDeltas.length,
+    seasonCount: getMatsumotoSeasons().length,
+    scopeLabel,
+    proximityTolerance,
+    bandGeometry,
+  };
+}
+
+function buildSpiralForwardDeltaOverlay(pitcherRows, spiralPitchRows) {
+  return buildSpiralDeltaOverlay(pitcherRows, spiralPitchRows, {
+    scopeLabel: 'category',
+    bandGeometry: getPrimaryDeltaBandGeometry(),
+  });
+}
+
+function buildSpiralProximityDeltaOverlay(pitcherRows, spiralPitchRows) {
+  return buildSpiralDeltaOverlay(pitcherRows, spiralPitchRows, {
+    filterByCategory: false,
+    proximityTolerance: LIVE_PROXIMITY_PITCH_TOLERANCE,
+    scopeLabel: 'proximity',
+    bandGeometry: getProximityDeltaBandGeometry(),
+  });
+}
+
+function formatForwardDeltaCaption(overlay) {
+  const { stats, categoryLabel, seasonCount, sampleCount, scopeLabel, proximityTolerance } = overlay;
+  const direction = stats.median === 0
+    ? '0'
+    : stats.median > 0
+      ? `+${stats.median} ↻`
+      : `${stats.median} ↺`;
+
+  if (scopeLabel === 'proximity') {
+    return `Next-pitch Δ · pitch ±${proximityTolerance} of latest · any result · median ${direction} · Q1–Q3 band · min–max whiskers · last ${seasonCount} season${seasonCount === 1 ? '' : 's'} · n=${sampleCount.toLocaleString()}`;
+  }
+
+  return `Next-pitch Δ for ${categoryLabel} · median ${direction} · Q1–Q3 band · min–max whiskers · last ${seasonCount} season${seasonCount === 1 ? '' : 's'} · n=${sampleCount.toLocaleString()}`;
+}
+
+function drawSpiralDeltaOverlay(context, center, maxRadius, overlay) {
+  const {
+    anchorPitch,
+    minPitch,
+    q1Pitch,
+    medianPitch,
+    q3Pitch,
+    maxPitch,
+    color,
+    stats,
+    bandGeometry,
+  } = overlay;
+  const {
+    innerRadiusFraction,
+    outerRadiusFraction,
+    midRadiusFraction,
+    numberRadiusFraction,
+  } = bandGeometry;
+  const tickOptions = {
+    innerRadiusFraction,
+    outerRadiusFraction,
+    numberRadiusFraction,
+  };
+
+  context.save();
+
+  if (stats.min !== stats.q1) {
+    drawOuterPitchArcStrokeByDelta(
+      context,
+      center,
+      maxRadius,
+      anchorPitch,
+      stats.min,
+      stats.q1,
+      midRadiusFraction,
+      color,
+      DELTA_WHISKER_LINE_WIDTH,
+    );
+  }
+
+  if (stats.max !== stats.q3) {
+    drawOuterPitchArcStrokeByDelta(
+      context,
+      center,
+      maxRadius,
+      anchorPitch,
+      stats.q3,
+      stats.max,
+      midRadiusFraction,
+      color,
+      DELTA_WHISKER_LINE_WIDTH,
+    );
+  }
+
+  drawOuterAnnularBandByDelta(
+    context,
+    center,
+    maxRadius,
+    anchorPitch,
+    stats.q1,
+    stats.q3,
+    innerRadiusFraction,
+    outerRadiusFraction,
+    hexToRgba(color, 0.28),
+  );
+
+  if (stats.min !== stats.q1) {
+    drawDeltaBandBoundaryTick(context, center, maxRadius, minPitch, color, {
+      ...tickOptions,
+      lineWidth: 1.5,
     });
   }
 
-  return transitions;
-}
+  drawDeltaBandBoundaryTick(context, center, maxRadius, q1Pitch, color, tickOptions);
+  drawDeltaBandBoundaryTick(context, center, maxRadius, q3Pitch, color, tickOptions);
 
-function drawDeltaSpectrumScene(context, transitions, layout, chartHeight) {
-  const plotLeft = layout.marginLeft;
-  const plotRight = DELTA_CHART_WIDTH - layout.marginRight;
-  const plotWidth = plotRight - plotLeft;
-  const axisY = chartHeight - layout.axisArea;
-
-  context.clearRect(0, 0, DELTA_CHART_WIDTH, chartHeight);
-  context.fillStyle = '#121820';
-  context.fillRect(0, 0, DELTA_CHART_WIDTH, chartHeight);
-
-  context.strokeStyle = 'rgba(154, 167, 181, 0.35)';
-  context.lineWidth = 1.5;
-  context.beginPath();
-  context.moveTo(plotLeft, axisY);
-  context.lineTo(plotRight, axisY);
-  context.stroke();
-
-  [
-    { signedDelta: -500, label: '500' },
-    { signedDelta: -250, label: '250' },
-    { signedDelta: 0, label: '0' },
-    { signedDelta: 250, label: '250' },
-    { signedDelta: 500, label: '500' },
-  ].forEach(({ signedDelta, label }) => {
-    const x = signedDeltaToPlotX(signedDelta, plotLeft, plotWidth);
-
-    context.beginPath();
-    context.strokeStyle = signedDelta === 0 ? 'rgba(154, 167, 181, 0.55)' : 'rgba(154, 167, 181, 0.28)';
-    context.lineWidth = signedDelta === 0 ? 2 : 1;
-    context.moveTo(x, axisY);
-    context.lineTo(x, axisY + 8);
-    context.stroke();
-
-    context.fillStyle = 'rgba(154, 167, 181, 0.9)';
-    context.font = '600 11px "Segoe UI", system-ui, sans-serif';
-    context.textAlign = 'center';
-    context.textBaseline = 'top';
-    context.fillText(label, x, axisY + 12);
-  });
-
-  context.font = '600 13px "Segoe UI", system-ui, sans-serif';
-  context.fillStyle = 'rgba(154, 167, 181, 0.85)';
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-  context.fillText('↺', plotLeft - 18, axisY);
-  context.fillText('↻', plotRight + 18, axisY);
-
-  DELTA_PLOT_CATEGORIES.forEach((category, index) => {
-    const { bandTop, bandBottom, labelY } = getCategoryBandBounds(layout, axisY, index);
-    const categoryTransitions = transitions.filter((entry) => entry.category === category.key);
-    const deltas = categoryTransitions.map((entry) => entry.signedDelta);
-    const stats = computeBoxPlotStats(deltas);
-
-    context.strokeStyle = 'rgba(154, 167, 181, 0.18)';
-    context.lineWidth = 1;
-    context.strokeRect(plotLeft, bandTop, plotWidth, layout.bandHeight);
-
-    context.fillStyle = category.color;
-    context.font = '700 13px "Segoe UI", system-ui, sans-serif';
-    context.textAlign = 'right';
-    context.textBaseline = 'middle';
-    context.fillText(category.label, plotLeft - 10, (bandTop + bandBottom) / 2);
-
-    if (!stats) {
-      context.fillStyle = 'rgba(154, 167, 181, 0.65)';
-      context.font = '500 11px "Segoe UI", system-ui, sans-serif';
-      context.textAlign = 'center';
-      context.fillText('No data', plotLeft + plotWidth / 2, (bandTop + bandBottom) / 2);
-      return;
-    }
-
-    const q1X = signedDeltaToPlotX(stats.q1, plotLeft, plotWidth);
-    const q3X = signedDeltaToPlotX(stats.q3, plotLeft, plotWidth);
-    const medianX = signedDeltaToPlotX(stats.median, plotLeft, plotWidth);
-    const minX = signedDeltaToPlotX(stats.min, plotLeft, plotWidth);
-    const maxX = signedDeltaToPlotX(stats.max, plotLeft, plotWidth);
-    const midY = (bandTop + bandBottom) / 2;
-
-    context.fillStyle = hexToRgba(category.color, 0.28);
-    context.fillRect(q1X, bandTop + 2, q3X - q1X, layout.bandHeight - 4);
-
-    context.strokeStyle = hexToRgba(category.color, 0.65);
-    context.lineWidth = 1.5;
-    context.beginPath();
-    context.moveTo(minX, midY);
-    context.lineTo(q1X, midY);
-    context.moveTo(q3X, midY);
-    context.lineTo(maxX, midY);
-    context.stroke();
-
-    context.beginPath();
-    context.strokeStyle = category.color;
-    context.lineWidth = 3;
-    context.moveTo(medianX, bandTop + 3);
-    context.lineTo(medianX, bandBottom - 3);
-    context.stroke();
-
-    context.beginPath();
-    context.strokeStyle = category.color;
-    context.lineWidth = 1.5;
-    context.moveTo(minX, bandTop + 4);
-    context.lineTo(minX, bandBottom - 4);
-    context.moveTo(maxX, bandTop + 4);
-    context.lineTo(maxX, bandBottom - 4);
-    context.stroke();
-
-    drawDeltaStatLabels(
-      context,
-      buildInsideBoxLabels(stats, plotLeft, plotWidth),
-      midY,
-      category.color,
-      true,
-    );
-    drawDeltaStatLabels(
-      context,
-      buildGapLabels(stats, plotLeft, plotWidth),
-      labelY,
-      category.color,
-    );
-  });
-}
-
-function renderDeltaSpectrumLegend() {
-  const legend = document.createElement('div');
-  legend.className = 'result-legend result-legend--top';
-
-  DELTA_PLOT_CATEGORIES.forEach((category) => {
-    const item = document.createElement('span');
-    item.className = 'result-legend-item';
-
-    const swatch = document.createElement('span');
-    swatch.className = 'result-legend-swatch';
-    swatch.style.backgroundColor = category.color;
-
-    const label = document.createElement('span');
-    label.textContent = category.label;
-
-    item.append(swatch, label);
-    legend.appendChild(item);
-  });
-
-  return legend;
-}
-
-function renderPitchDeltaSpectrum(pitcherRows, pitcherName) {
-  const card = createChartCard(
-    'Matsumoto Plot',
-    'Absolute delta from the previous pitch on a flat 500 ↺ to 500 ↻ axis. Each band shows aggregate min, Q1, median, Q3, and max for that result type.',
-  );
-  card.classList.add('chart-card--wide', 'chart-card--delta-spectrum');
-
-  const pitchRows = getRecentChronologicalPitchRows(pitcherRows);
-  const transitions = buildPitchDeltaTransitions(pitchRows);
-
-  if (pitchRows.length < 2 || transitions.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'empty-state';
-    empty.textContent = pitcherName
-      ? 'Not enough pitch transitions to draw the Matsumoto Plot.'
-      : 'Select a pitcher to view the Matsumoto Plot.';
-    card.appendChild(empty);
-    return card;
+  if (stats.max !== stats.q3) {
+    drawDeltaBandBoundaryTick(context, center, maxRadius, maxPitch, color, {
+      ...tickOptions,
+      lineWidth: 1.5,
+    });
   }
 
-  const stage = document.createElement('div');
-  stage.className = 'delta-spectrum-stage';
+  drawDeltaBandBoundaryTick(context, center, maxRadius, medianPitch, color, {
+    ...tickOptions,
+    lineWidth: 3,
+    showPitchNumber: true,
+  });
 
-  const canvasWrap = document.createElement('div');
-  canvasWrap.className = 'delta-spectrum-canvas-wrap';
-
-  const canvas = document.createElement('canvas');
-  canvas.className = 'delta-spectrum-canvas';
-  canvas.setAttribute('role', 'img');
-  canvas.setAttribute(
-    'aria-label',
-    `Matsumoto Plot for ${pitcherName} showing aggregate box-plot stats by result type.`,
-  );
-
-  const layout = buildHorizontalBandLayout();
-  const chartHeight = computeDeltaChartHeight(layout);
-
-  canvas.width = DELTA_CHART_WIDTH * DELTA_CHART_RENDER_SCALE;
-  canvas.height = chartHeight * DELTA_CHART_RENDER_SCALE;
-
-  const context = canvas.getContext('2d');
-  context.setTransform(DELTA_CHART_RENDER_SCALE, 0, 0, DELTA_CHART_RENDER_SCALE, 0, 0);
-  drawDeltaSpectrumScene(context, transitions, layout, chartHeight);
-
-  canvasWrap.appendChild(canvas);
-  stage.append(renderDeltaSpectrumLegend(), canvasWrap);
-
-  const meta = document.createElement('p');
-  meta.className = 'spiral-legend';
-  meta.textContent = 'Q1/Q3 on box center line inside shaded band · min, median, max in gap above each band';
-  stage.appendChild(meta);
-  card.appendChild(stage);
-
-  return card;
+  context.restore();
 }
 
 function interpolatePitchNumber(fromPitch, toPitch, progress) {
@@ -1341,7 +1715,7 @@ function getConnectorLineDash(fromPoint, toPoint) {
 
 function drawSpiralGuide(context, center, maxRadius) {
   context.save();
-  context.strokeStyle = 'rgba(154, 167, 181, 0.12)';
+  context.strokeStyle = `${CHART_MUTED}, 0.12)`;
   context.lineWidth = 1;
 
   [SPIRAL_MIN_RADIUS, SPIRAL_MAX_RADIUS].forEach((radiusFraction) => {
@@ -1350,7 +1724,7 @@ function drawSpiralGuide(context, center, maxRadius) {
     context.stroke();
   });
 
-  const guideRadius = (SPIRAL_MAX_RADIUS + 0.08) * maxRadius;
+  const guideRadius = SPIRAL_GUIDE_OUTER_RADIUS * maxRadius;
 
   for (let pitch = 0; pitch <= PITCH_MAX; pitch += 100) {
     const angle = pitchNumberToAngle(pitch);
@@ -1363,7 +1737,7 @@ function drawSpiralGuide(context, center, maxRadius) {
     context.stroke();
   }
 
-  context.fillStyle = 'rgba(154, 167, 181, 0.85)';
+  context.fillStyle = `${CHART_MUTED}, 0.85)`;
   context.font = '10px "Segoe UI", system-ui, sans-serif';
   context.textAlign = 'center';
   context.textBaseline = 'middle';
@@ -1418,14 +1792,14 @@ function drawSpiralPoint(context, point, isLatest) {
   context.arc(point.x, point.y, radius, 0, TWO_PI);
   context.fill();
 
-  context.strokeStyle = 'rgba(15, 20, 25, 0.9)';
+  context.strokeStyle = CHART_CANVAS_STROKE;
   context.lineWidth = 1;
   context.stroke();
 
   let fontSize = label.length >= 3 ? 7 : 8;
   context.textAlign = 'center';
   context.textBaseline = 'middle';
-  context.fillStyle = '#e8edf2';
+  context.fillStyle = CHART_TEXT_COLOR;
 
   while (fontSize > 5) {
     context.font = `600 ${fontSize}px "Segoe UI", system-ui, sans-serif`;
@@ -1439,7 +1813,7 @@ function drawSpiralPoint(context, point, isLatest) {
 
   if (isLatest) {
     context.beginPath();
-    context.strokeStyle = 'rgba(232, 237, 242, 0.95)';
+    context.strokeStyle = 'rgba(239, 232, 245, 0.95)';
     context.lineWidth = 2;
     context.arc(point.x, point.y, radius + 3, 0, TWO_PI);
     context.stroke();
@@ -1583,14 +1957,11 @@ function drawPitchSpiralScene(
   center,
   maxRadius,
   points,
-  rangeRegions = [],
-  swingAnchor = null,
+  forwardDeltaOverlay = null,
+  proximityDeltaOverlay = null,
+  rangeTargetPitch = null,
 ) {
   drawSpiralGuide(context, center, maxRadius);
-
-  if (rangeRegions.length > 0 && swingAnchor !== null) {
-    drawRangeMarkers(context, center, maxRadius, rangeRegions, swingAnchor);
-  }
 
   context.lineWidth = 2;
   context.lineCap = 'round';
@@ -1612,15 +1983,45 @@ function drawPitchSpiralScene(
     drawSpiralPoint(context, point, index === points.length - 1);
   });
 
-  const simulatedSwing = getActiveSimulatedSwing();
-  if (simulatedSwing !== null) {
-    drawHypotheticalSwing(context, center, maxRadius, simulatedSwing);
+  if (forwardDeltaOverlay) {
+    drawSpiralDeltaOverlay(context, center, maxRadius, forwardDeltaOverlay);
+  }
+
+  if (proximityDeltaOverlay) {
+    drawSpiralDeltaOverlay(context, center, maxRadius, proximityDeltaOverlay);
+  }
+
+  if (rangeTargetPitch !== null) {
+    drawHypotheticalSwing(context, center, maxRadius, rangeTargetPitch);
   }
 }
 
-function renderSpiralLegend(categories) {
+function appendDeltaOverlayLegendItem(parent, overlay, label) {
+  if (!overlay) {
+    return;
+  }
+
+  const item = document.createElement('span');
+  item.className = 'result-legend-item';
+
+  const swatch = document.createElement('span');
+  swatch.className = 'result-legend-swatch result-legend-swatch--ring';
+  swatch.style.borderColor = overlay.color;
+  swatch.style.backgroundColor = hexToRgba(overlay.color, 0.28);
+
+  const text = document.createElement('span');
+  text.textContent = label;
+
+  item.append(swatch, text);
+  parent.appendChild(item);
+}
+
+function renderSpiralLegend(categories, forwardDeltaOverlay = null, proximityDeltaOverlay = null) {
   const legend = document.createElement('div');
   legend.className = 'result-legend result-legend--top';
+
+  const resultsRow = document.createElement('div');
+  resultsRow.className = 'result-legend-row';
 
   categories.forEach((category) => {
     const item = document.createElement('span');
@@ -1634,13 +2035,8 @@ function renderSpiralLegend(categories) {
     label.textContent = category;
 
     item.append(swatch, label);
-    legend.appendChild(item);
+    resultsRow.appendChild(item);
   });
-
-  const transitionHeading = document.createElement('div');
-  transitionHeading.className = 'result-legend-break';
-  transitionHeading.textContent = 'Transitions';
-  legend.appendChild(transitionHeading);
 
   [
     { label: 'Inning change', swatchClass: 'connector-line-swatch connector-line-swatch--dotted' },
@@ -1656,8 +2052,28 @@ function renderSpiralLegend(categories) {
     text.textContent = label;
 
     item.append(swatch, text);
-    legend.appendChild(item);
+    resultsRow.appendChild(item);
   });
+
+  legend.appendChild(resultsRow);
+
+  if (forwardDeltaOverlay || proximityDeltaOverlay) {
+    const overlayRow = document.createElement('div');
+    overlayRow.className = 'result-legend-row';
+
+    appendDeltaOverlayLegendItem(
+      overlayRow,
+      forwardDeltaOverlay,
+      'Next Pitch Range by Result',
+    );
+    appendDeltaOverlayLegendItem(
+      overlayRow,
+      proximityDeltaOverlay,
+      'Next Pitch Range by Number',
+    );
+
+    legend.appendChild(overlayRow);
+  }
 
   return legend;
 }
@@ -1673,7 +2089,7 @@ function attachSpiralZoom(canvas, drawScene) {
   function redraw() {
     const context = canvas.getContext('2d');
     context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = '#121820';
+    context.fillStyle = CHART_CANVAS_COLOR;
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.save();
     context.scale(SPIRAL_RENDER_SCALE, SPIRAL_RENDER_SCALE);
@@ -1703,12 +2119,12 @@ function attachSpiralZoom(canvas, drawScene) {
 function renderPitchSpiral(pitcherRows, pitcherName, batterName) {
   const card = createChartCard(
     'Spiral Scouting Graph',
-    'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Color shows result type; line style marks inning and game transitions. Scroll to zoom.',
+    'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Color shows result type; inner ring = next-pitch Δ by result category, outer grey ring = next-pitch Δ for any result when pitch # is ±50 of latest (seasons 11–13). Scroll to zoom.',
   );
   card.classList.add('chart-card--wide', 'chart-card--spiral');
 
   const allPitchRows = getChronologicalPitchRows(pitcherRows);
-  const pitchRows = getRecentChronologicalPitchRows(pitcherRows);
+  const pitchRows = getSpiralPitchRows(pitcherRows);
 
   if (pitchRows.length === 0) {
     const empty = document.createElement('p');
@@ -1723,8 +2139,15 @@ function renderPitchSpiral(pitcherRows, pitcherName, batterName) {
   const center = SPIRAL_CANVAS_SIZE / 2;
   const maxRadius = SPIRAL_CANVAS_SIZE * SPIRAL_RADIUS_SCALE;
   const points = buildSpiralPoints(pitchRows, center, maxRadius);
-  const legend = renderSpiralLegend(getActiveResultCategories(points));
-  const rangeTable = buildMatchupRangeTable(pitcherName, batterName);
+  const matsumotoSourceRows = getPitcherDisplayRows(pitcherName);
+  const forwardDeltaOverlay = buildSpiralForwardDeltaOverlay(matsumotoSourceRows, pitchRows);
+  const proximityDeltaOverlay = buildSpiralProximityDeltaOverlay(matsumotoSourceRows, pitchRows);
+  const rangeTargetPitch = getCombinedRangeMedianPitch(forwardDeltaOverlay, proximityDeltaOverlay);
+  const legend = renderSpiralLegend(
+    getActiveResultCategories(points),
+    forwardDeltaOverlay,
+    proximityDeltaOverlay,
+  );
 
   const stage = document.createElement('div');
   stage.className = 'spiral-stage';
@@ -1735,146 +2158,161 @@ function renderPitchSpiral(pitcherRows, pitcherName, batterName) {
   const canvas = document.createElement('canvas');
   canvas.className = 'spiral-canvas';
   canvas.setAttribute('role', 'img');
+  const overlayLabels = [
+    forwardDeltaOverlay ? `${forwardDeltaOverlay.categoryLabel} category overlay` : null,
+    proximityDeltaOverlay ? `pitch ±${LIVE_PROXIMITY_PITCH_TOLERANCE} overlay` : null,
+  ].filter(Boolean);
   canvas.setAttribute(
     'aria-label',
-    `Spiral Scouting Graph for ${pitcherName} with ${pitchRows.length} pitches colored by result category.`,
+    overlayLabels.length > 0
+      ? `Spiral Scouting Graph for ${pitcherName} with ${pitchRows.length} pitches and ${overlayLabels.join(' and ')}.`
+      : `Spiral Scouting Graph for ${pitcherName} with ${pitchRows.length} pitches colored by result category.`,
   );
 
   canvasWrap.appendChild(canvas);
   stage.append(legend, canvasWrap);
 
   const spiralController = attachSpiralZoom(canvas, (context) => {
-    const simulatedSwing = getActiveSimulatedSwing();
-    const rangeRegions = simulatedSwing !== null && rangeTable
-      ? buildRangeSpiralMarkers(rangeTable.rows, simulatedSwing)
-      : [];
-
-    drawPitchSpiralScene(context, center, maxRadius, points, rangeRegions, simulatedSwing);
+    drawPitchSpiralScene(
+      context,
+      center,
+      maxRadius,
+      points,
+      forwardDeltaOverlay,
+      proximityDeltaOverlay,
+      rangeTargetPitch,
+    );
   });
   spiralRedraw = spiralController.redraw;
 
   const meta = document.createElement('p');
   meta.className = 'spiral-legend';
-  meta.textContent = pitchRows.length < allPitchRows.length
-    ? `${pitchRows.length.toLocaleString()} of ${allPitchRows.length.toLocaleString()} pitches · scroll to zoom · white ring marks most recent pitch`
-    : `${pitchRows.length.toLocaleString()} pitches · scroll to zoom · white ring marks most recent pitch`;
+  const metaParts = [];
 
+  if (pitchRows.length < allPitchRows.length) {
+    const recentGames = getRecentGameIds(pitcherRows, LIVE_SPIRAL_GAME_COUNT);
+    metaParts.push(`Last ${recentGames.length} game${recentGames.length === 1 ? '' : 's'} · ${pitchRows.length.toLocaleString()} of ${allPitchRows.length.toLocaleString()} pitches`);
+  } else {
+    metaParts.push(`${pitchRows.length.toLocaleString()} pitches`);
+  }
+
+  if (forwardDeltaOverlay) {
+    metaParts.push(formatForwardDeltaCaption(forwardDeltaOverlay));
+  }
+
+  if (proximityDeltaOverlay) {
+    metaParts.push(formatForwardDeltaCaption(proximityDeltaOverlay));
+  }
+
+  if (rangeTargetPitch !== null) {
+    metaParts.push(`simulated swing target · pitch ${rangeTargetPitch}`);
+  }
+
+  metaParts.push('scroll to zoom · white ring marks most recent pitch');
+  meta.textContent = metaParts.join(' · ');
   stage.appendChild(meta);
   card.appendChild(stage);
   return card;
 }
 
-function getSituationState() {
-  const readRunner = (name) => (
-    document.querySelector(`input[name="${name}"]`)?.checked ?? false
-  );
-
-  return {
-    onFirst: readRunner('runner-first'),
-    onSecond: readRunner('runner-second'),
-    onThird: readRunner('runner-third'),
-    outs: Number(document.getElementById('outs-count')?.value ?? 0),
-  };
-}
-
-function renderRangeTableCard(pitcherName, batterName) {
-  const card = createChartCard('Range table', '');
-  card.classList.add('chart-card--table', 'chart-card--range');
-
-  const caption = card.querySelector('.chart-caption');
-  if (caption) {
-    caption.remove();
-  }
-
-  const pitcher = playerStatsByName.get(pitcherName);
-  const batter = playerStatsByName.get(batterName);
-
-  if (!pitcher || !batter) {
-    const empty = document.createElement('p');
-    empty.className = 'empty-state';
-    empty.textContent = pitcherName && batterName
-      ? 'Player ratings were not found for this matchup.'
-      : 'Select a pitcher and batter to view the range table.';
-    card.appendChild(empty);
-    return card;
-  }
-
-  const simulatedSwing = getActiveSimulatedSwing();
-  const rangeTable = buildMatchupRangeTable(pitcherName, batterName);
-
-  const tableWrap = document.createElement('div');
-  tableWrap.className = 'range-table-wrap';
-
-  const table = document.createElement('table');
-  table.className = 'range-table';
-
-  const thead = document.createElement('thead');
-  thead.innerHTML = `
-    <tr>
-      <th scope="col">Result</th>
-      <th scope="col">Down</th>
-      <th scope="col">Up</th>
-    </tr>
-  `;
-
-  const tbody = document.createElement('tbody');
-  rangeTable.rows.forEach((row) => {
-    const bounds = formatRangeBounds(row, simulatedSwing);
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${row.result}</td>
-      <td>${bounds.down}</td>
-      <td>${bounds.up}</td>
-    `;
-    tbody.appendChild(tr);
+function getInferredLiveSituation() {
+  return inferSituationFromPlays(allRows, {
+    gameNumber: liveTargetGame?.game?.['Game#'],
+    offenseTeam: SHEET_CONFIG.scoutTeamAbv,
   });
-
-  table.append(thead, tbody);
-  tableWrap.appendChild(table);
-  card.appendChild(tableWrap);
-  return card;
 }
+
+function formatInferredSituationCaption(situation) {
+  if (situation.source !== 'inferred') {
+    return 'Waiting for SUN offensive plays in the locked game.';
+  }
+
+  const details = [
+    situation.inning ? `Inning ${situation.inning}` : '',
+    situation.play ? `Play ${situation.play}` : '',
+  ].filter(Boolean);
+
+  return details.length > 0
+    ? `Inferred from ${details.join(' · ')}`
+    : 'Inferred from the latest SUN offensive play';
+}
+
+function renderInferredSituationGraphic(situation, container) {
+  if (!container) {
+    return;
+  }
+
+  container.querySelector('.situation-base--first')
+    ?.classList.toggle('is-active', situation.onFirst);
+  container.querySelector('.situation-base--second')
+    ?.classList.toggle('is-active', situation.onSecond);
+  container.querySelector('.situation-base--third')
+    ?.classList.toggle('is-active', situation.onThird);
+  container.querySelector('.situation-out--1')
+    ?.classList.toggle('is-active', situation.outs >= 1);
+  container.querySelector('.situation-out--2')
+    ?.classList.toggle('is-active', situation.outs >= 2);
+
+  const labelParts = [];
+  if (situation.onFirst) {
+    labelParts.push('runner on first');
+  }
+  if (situation.onSecond) {
+    labelParts.push('runner on second');
+  }
+  if (situation.onThird) {
+    labelParts.push('runner on third');
+  }
+  labelParts.push(`${situation.outs} out${situation.outs === 1 ? '' : 's'}`);
+
+  container.setAttribute('aria-label', labelParts.join(', '));
+  container.title = formatInferredSituationCaption(situation);
+}
+
+function getSituationState() {
+  return inferredSituation ?? getInferredLiveSituation();
+}
+
+/*
+ * LEGACY: range table card and manual situation panel
+ * function renderRangeTableCard(pitcherName, batterName) { ... }
+ * function updateSituationPanel() { ... }
+ * function getManualSituationState() { ... }
+ */
 
 function renderDashboard(pitcherRows, pitcherName, batterName) {
   spiralRedraw = null;
-  chartGrid.replaceChildren();
-
-  matchupStackEl?.replaceChildren(
-    renderMatchup(pitcherName, batterName),
-    renderRangeTableCard(pitcherName, batterName),
-  );
-
-  const lastTenCard = renderLastTenPitchesTable(pitcherRows);
-  lastTenCard.classList.add('chart-card--wide');
-
-  chartGrid.append(
-    lastTenCard,
-    renderPitchSpiral(pitcherRows, pitcherName, batterName),
-    renderPitchDeltaSpectrum(pitcherRows, pitcherName),
-  );
+  chartGrid.replaceChildren(renderPitchSpiral(pitcherRows, pitcherName, batterName));
 }
 
 function updateDashboard() {
+  refreshLiveTargetGame();
+  updateHeroStatus();
+
+  const pitchers = getAvailablePitchers();
+  populatePitcherDropdown(pitchers);
+
   const selectedPitcher = pitcherSelect.value;
   if (selectedPitcher !== lastSelectedPitcher) {
-    simulatedHypotheticalSwing = null;
     lastSelectedPitcher = selectedPitcher;
   }
 
   if (!selectedPitcher) {
     rowCountEl.textContent = '0 plays';
     batterSelect.replaceChildren();
-    matchupStackEl?.replaceChildren();
+    pitcherStatsEl?.replaceChildren();
+    batterStatsEl?.replaceChildren();
     chartGrid.replaceChildren();
     return;
   }
 
-  const filteredRows = filterRowsByPitcher(allRows, selectedPitcher);
-  const batters = getAllBatters();
+  const filteredRows = getPitcherDisplayRows(selectedPitcher);
+  const batters = getAvailableBatters();
   populateBatterDropdown(batters, filteredRows);
 
   const selectedBatter = batterSelect.value;
   rowCountEl.textContent = `${filteredRows.length.toLocaleString()} plays`;
+  renderMatchupStatsInline(selectedPitcher, selectedBatter);
   renderDashboard(filteredRows, selectedPitcher, selectedBatter);
 }
 
@@ -1887,11 +2325,19 @@ async function loadSheetData({ forceRefresh = false } = {}) {
   setStatus(forceRefresh ? 'Syncing sheet data...' : 'Loading sheet data...');
 
   try {
-    const [playsResponse, playerStats] = await Promise.all([
+    const [playsResponse, playerStats, gamesMatrix, datesMatrix] = await Promise.all([
       fetch(getSheetCsvUrl(SHEET_CONFIG.sheetName, { bustCache: forceRefresh }), {
         cache: forceRefresh ? 'no-store' : 'default',
       }),
       loadPlayerStatsByName({ forceRefresh }),
+      fetchSheetMatrix(SHEET_CONFIG.gamesSheetName, { forceRefresh }).catch((error) => {
+        console.warn('Games tab unavailable', error);
+        return [];
+      }),
+      fetchSheetMatrix(SHEET_CONFIG.datesSheetName, { forceRefresh }).catch((error) => {
+        console.warn('Dates tab unavailable', error);
+        return [];
+      }),
     ]);
 
     if (!playsResponse.ok) {
@@ -1900,15 +2346,18 @@ async function loadSheetData({ forceRefresh = false } = {}) {
 
     const playsCsvText = await playsResponse.text();
     const playsMatrix = parseCsv(playsCsvText);
-    allRows = rowsToObjects(playsMatrix).map(normalizePlayRow);
+    allRows = parsePlaysMatrix(playsMatrix).map(normalizePlayRow);
+    historicalRows = await loadHistoricalPlays(forceRefresh);
+    allGames = rowsToObjects(gamesMatrix);
+    sessionDates = parseSessionDates(rowsToObjects(datesMatrix));
     playerStatsByName = playerStats;
-
-    const pitchers = getUniquePitchers(allRows);
-    populatePitcherDropdown(pitchers);
+    refreshLiveTargetGame();
 
     updateDashboard();
     setStatus(
-      `${forceRefresh ? 'Synced' : 'Loaded'} ${allRows.length.toLocaleString()} plays · ${playerStatsByName.size.toLocaleString()} players · ${formatSyncTime(new Date())}`,
+      `${forceRefresh ? 'Synced' : 'Loaded'} ${allRows.length.toLocaleString()} plays`
+      + `${historicalRows.length > 0 ? ` · ${historicalRows.length.toLocaleString()} historical` : ''}`
+      + ` · ${playerStatsByName.size.toLocaleString()} players · ${formatSyncTime(new Date())}`,
     );
   } catch (error) {
     console.error(error);
@@ -1920,26 +2369,16 @@ async function loadSheetData({ forceRefresh = false } = {}) {
 
 pitcherSelect.addEventListener('change', updateDashboard);
 batterSelect.addEventListener('change', updateDashboard);
-hypotheticalSwingToggle.addEventListener('change', handleHypotheticalSwingToggle);
-hypotheticalSwingInput.addEventListener('input', () => {
-  sanitizeHypotheticalSwingInput();
-  if (hypotheticalSwingToggle.checked) {
-    updateDashboard();
-  }
-});
-simulateSwingBtn.addEventListener('click', handleSimulateSwing);
-syncSheetBtn.addEventListener('click', () => loadSheetData({ forceRefresh: true }));
 
-pitchRecencySelect?.addEventListener('change', () => {
-  if (pitcherSelect.value) {
-    updateDashboard();
-  }
-});
+/*
+ * LEGACY event listeners:
+ * scoutModeInputs.forEach((input) => input.addEventListener('change', updateDashboard));
+ * hypotheticalSwingToggle.addEventListener('change', handleHypotheticalSwingToggle);
+ * hypotheticalSwingInput.addEventListener('input', ...);
+ * simulateSwingBtn.addEventListener('click', handleSimulateSwing);
+ * syncSheetBtn.addEventListener('click', () => loadSheetData({ forceRefresh: true }));
+ * pitchRecencySelect?.addEventListener('change', ...);
+ * situationPanel?.addEventListener('change', ...);
+ */
 
-situationPanel?.addEventListener('change', () => {
-  if (pitcherSelect.value) {
-    updateDashboard();
-  }
-});
-
-loadSheetData();
+loadSheetData({ forceRefresh: true });

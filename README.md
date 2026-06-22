@@ -6,7 +6,7 @@ Repository: [OrbTheRobot/Tornado-Scouting](https://github.com/OrbTheRobot/Tornad
 
 ## Data source
 
-- Spreadsheet: [WNC 3 Export Tables](https://docs.google.com/spreadsheets/d/1VViAMYTIwtyiWibrDES-q98xgek7hynYxGtAizWi0Y0/edit)
+- Spreadsheet: [Export Tables](https://docs.google.com/spreadsheets/d/1NQ4l0EjwFYVdIjlYIkycYfuWw_jdZKiWsNURTcTy4AA/edit)
 - Tab: `Plays (Converted)`
 - Filter column: `Pitcher` (column I)
 
@@ -36,8 +36,6 @@ Open `Tornado-Scouting.code-workspace` in Cursor to keep this project isolated f
 
 Chart renderers live in `app.js`:
 
-1. **Last 10 pitches** — table sorted chronologically by `Play`
-2. **Spiral Scouting Graph** — full pitcher history on a pitch-number compass with result colors and radial recency
-3. **Matsumoto Plot** — horizontal box plot of pitch-to-pitch deltas by result type
+1. **Spiral Scouting Graph** — pitch compass with result colors and next-pitch range overlays
 
 Configuration lives in `config.js`. See `docs/rln-charts-dashboard.md` for full specs.
