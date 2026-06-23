@@ -26,17 +26,30 @@ const RANGE_BAND_FILL_OPACITY = 0.25;
 const RANGE_MARKER_LINE_WIDTH = 3;
 const RANGE_BOUNDARY_TICK_WIDTH = 3;
 const HYPOTHETICAL_SWING_LINE_WIDTH = 3.5;
-const ATTACK_ZONE_TOLERANCE = 150;
 const MEME_PITCH_NUMBERS = [
   1, 69, 111, 222, 333, 404, 420, 444, 500, 501, 555, 569, 666, 669, 696, 711, 777, 888, 911, 999, 1000,
 ];
 const LIVE_SPIRAL_GAME_COUNT = 3;
+const SPIRAL_VISIBLE_PITCH_COUNT = 25;
+const BUCKET_USAGE_RECENT_PITCH_COUNT = 100;
+const FAVOURITE_PITCHES_LIMIT = 10;
 const LIVE_MATSUMOTO_SEASON_COUNT = 3;
 const SPIRAL_CANVAS_SIZE = 960;
 const SPIRAL_RENDER_SCALE = 3;
+const SPIRAL_TEXT_SCALE = 2;
 const SPIRAL_MIN_RADIUS = 0.03;
 const SPIRAL_MAX_RADIUS = 0.88;
+const ATTACK_ZONE_WIDTH = 300;
+const ATTACK_ZONE_BAND_INNER_RADIUS = SPIRAL_MAX_RADIUS - 0.028;
+const ATTACK_ZONE_BAND_OUTER_RADIUS = SPIRAL_MAX_RADIUS + 0.014;
+const ATTACK_ZONE_BAND_FILL = 'rgba(255, 130, 130, 0.08)';
+const ATTACK_ZONE_BAND_STROKE = 'rgba(255, 130, 130, 0.72)';
+const ATTACK_ZONE_HATCH_PITCH_STEP = 4;
 const SPIRAL_GUIDE_OUTER_RADIUS = SPIRAL_MAX_RADIUS + 0.08;
+const SPIRAL_AXIS_LABEL_OFFSET_PX = 16 * SPIRAL_TEXT_SCALE;
+const BUCKET_USAGE_LABEL_COLOR = 'rgba(176, 156, 196, 0.95)';
+const BUCKET_USAGE_RADIUS_OFFSET_PX = -4;
+const BUCKET_USAGE_LINE_GAP_PX = 2;
 const SPIRAL_GUIDE_LABEL_CLEARANCE = 0.105;
 const DELTA_BAND_THICKNESS = 0.038;
 const DELTA_BAND_GAP = 0.012;
@@ -56,6 +69,7 @@ const RANGE_BAND_GAP = 0.012;
 const RANGE_MARKER_INNER_RADIUS = PROXIMITY_DELTA_BAND_OUTER_RADIUS + RANGE_BAND_GAP;
 const RANGE_MARKER_OUTER_RADIUS = RANGE_MARKER_INNER_RADIUS + DELTA_BAND_THICKNESS;
 const SITUATION_MINI_RADIUS = RANGE_MARKER_OUTER_RADIUS + 0.058;
+const DELTA_BAND_RADIUS_OFFSET_PX = 15;
 const SITUATION_MINI_PIXEL_SIZE = 48;
 const SITUATION_RUNS_TEXT_COLOR = '#35bfa5';
 const SITUATION_INNING_END_TEXT_COLOR = '#f5c842';
@@ -72,7 +86,6 @@ const CHART_CANVAS_STROKE = 'rgba(16, 12, 22, 0.9)';
 const CHART_MUTED = 'rgba(176, 156, 196';
 const SPIRAL_ZOOM_MIN = 0.6;
 const SPIRAL_ZOOM_MAX = 8;
-const SPIRAL_TEXT_SCALE = 2;
 const TWO_PI = Math.PI * 2;
 
 const BASE_HIT_RESULTS = new Set(['1B', '1BWH', '2B', '2BWH', '3B', 'BB', 'IF1B']);
@@ -123,6 +136,8 @@ const liveGameContextEl = document.getElementById('live-game-context');
 const gameScoreEl = document.getElementById('game-score');
 const gameScoreTeamsEl = document.getElementById('game-score-teams');
 const situationGraphicEl = document.getElementById('situation-graphic');
+const firstPitchModeCheckbox = document.getElementById('first-pitch-mode');
+const firstPitchModeBannerEl = document.getElementById('first-pitch-mode-banner');
 const pitcherStatsEl = document.getElementById('pitcher-stats');
 const batterStatsEl = document.getElementById('batter-stats');
 const statusEl = document.getElementById('status');
@@ -149,10 +164,13 @@ let allGames = [];
 let sessionDates = [];
 let liveTargetGame = null;
 let playerStatsByName = new Map();
+let pitcherRowsByName = new Map();
+let pitcherAnalyticsByName = new Map();
 let isLoadingSheet = false;
 let spiralRedraw = null;
 let lastSelectedPitcher = '';
 let inferredSituation = null;
+let firstPitchModeActive = false;
 
 function isLiveScoutingMode() {
   return true;
@@ -443,6 +461,15 @@ function updateHeroStatus() {
   updateGameScore();
   updateLiveGameContext();
   renderInferredSituationGraphic(inferredSituation, situationGraphicEl);
+  updateFirstPitchModeBanner();
+}
+
+function updateFirstPitchModeBanner() {
+  if (!firstPitchModeBannerEl) {
+    return;
+  }
+
+  firstPitchModeBannerEl.hidden = !firstPitchModeActive;
 }
 
 function getAvailablePitchers() {
@@ -501,16 +528,56 @@ function parseSwingNumber(value) {
   return swingNumber;
 }
 
-function getCombinedRangeMedianPitch(forwardDeltaOverlay, proximityDeltaOverlay) {
-  if (!forwardDeltaOverlay || !proximityDeltaOverlay) {
+function getPitchHundredBucketIndex(pitchNumber) {
+  return Math.floor((pitchNumber - 1) / 100);
+}
+
+function getPitchHundredBucketBounds(bucketIndex) {
+  return {
+    target: Math.min(PITCH_MAX, bucketIndex * 100 + 50),
+  };
+}
+
+function getAttackZoneBoundsFromTarget(target) {
+  const halfWidth = ATTACK_ZONE_WIDTH / 2;
+
+  return {
+    target,
+    attackMin: Math.round(normalizePitchNumber(target - halfWidth)),
+    attackMax: Math.round(normalizePitchNumber(target + halfWidth)),
+  };
+}
+
+function getAttackZoneFromPitchRows(pitchRows) {
+  if (!pitchRows?.length) {
     return null;
   }
 
-  const avgDelta = (
-    forwardDeltaOverlay.stats.median + proximityDeltaOverlay.stats.median
-  ) / 2;
+  const bucketCounts = new Map();
 
-  return Math.round(pitchFromDisplayDelta(forwardDeltaOverlay.anchorPitch, avgDelta));
+  pitchRows.forEach(({ pitchNumber }) => {
+    const bucketIndex = getPitchHundredBucketIndex(pitchNumber);
+    bucketCounts.set(bucketIndex, (bucketCounts.get(bucketIndex) ?? 0) + 1);
+  });
+
+  let winningBucketIndex = 0;
+  let winningCount = -1;
+
+  bucketCounts.forEach((count, bucketIndex) => {
+    if (
+      count > winningCount
+      || (count === winningCount && bucketIndex > winningBucketIndex)
+    ) {
+      winningCount = count;
+      winningBucketIndex = bucketIndex;
+    }
+  });
+
+  return {
+    bucketIndex: winningBucketIndex,
+    bucketCount: winningCount,
+    ...getAttackZoneBoundsFromTarget(getPitchHundredBucketBounds(winningBucketIndex).target),
+  };
 }
 
 function parsePitchNumber(row) {
@@ -593,19 +660,19 @@ function getOnBasePitchRange(rangeRows, swingAnchor) {
   };
 }
 
-function buildSpiralSwingSummary(rangeTargetPitch, rangeRows) {
-  if (rangeTargetPitch === null) {
+function buildSpiralSwingSummary(attackZone, rangeRows) {
+  if (!attackZone) {
     return null;
   }
 
   const onBaseRange = rangeRows?.length
-    ? getOnBasePitchRange(rangeRows, rangeTargetPitch)
+    ? getOnBasePitchRange(rangeRows, attackZone.target)
     : null;
 
   return {
-    attackMin: Math.round(normalizePitchNumber(rangeTargetPitch - ATTACK_ZONE_TOLERANCE)),
-    attackMax: Math.round(normalizePitchNumber(rangeTargetPitch + ATTACK_ZONE_TOLERANCE)),
-    target: Math.round(rangeTargetPitch),
+    attackMin: attackZone.attackMin,
+    attackMax: attackZone.attackMax,
+    target: attackZone.target,
     onBaseMin: onBaseRange?.min !== null ? Math.round(onBaseRange.min) : null,
     onBaseMax: onBaseRange?.max !== null ? Math.round(onBaseRange.max) : null,
   };
@@ -625,15 +692,22 @@ function buildSpiralRangeChartRow(label, overlay) {
   };
 }
 
-function buildSpiralRangeOverlaySummary(forwardDeltaOverlay, proximityDeltaOverlay) {
+function buildSpiralRangeOverlaySummary(forwardDeltaOverlay, proximityDeltaOverlay, options = {}) {
+  const { firstPitchMode = false } = options;
   const rows = [];
 
-  if (forwardDeltaOverlay) {
-    rows.push(buildSpiralRangeChartRow('By Result', forwardDeltaOverlay));
-  }
+  if (firstPitchMode) {
+    if (proximityDeltaOverlay) {
+      rows.push(buildSpiralRangeChartRow('First Pitches', proximityDeltaOverlay));
+    }
+  } else {
+    if (forwardDeltaOverlay) {
+      rows.push(buildSpiralRangeChartRow('By Result', forwardDeltaOverlay));
+    }
 
-  if (proximityDeltaOverlay) {
-    rows.push(buildSpiralRangeChartRow('By Value', proximityDeltaOverlay));
+    if (proximityDeltaOverlay) {
+      rows.push(buildSpiralRangeChartRow('By Value', proximityDeltaOverlay));
+    }
   }
 
   if (rows.length === 0) {
@@ -764,6 +838,14 @@ function createSpiralSwingOverlay(summary) {
     ], {
       highlightValueLabels: ['Recommended Swing'],
     });
+  });
+}
+
+function createSpiralFirstPitchModeOverlay() {
+  return createSpiralPanelOverlay('spiral-panel-overlay--first-pitch', () => {
+    const label = document.createElement('div');
+    label.textContent = 'First Pitch Mode Active';
+    return label;
   });
 }
 
@@ -1056,18 +1138,162 @@ function dedupePlayRowsByGamePlay(rows, { preferLast = true } = {}) {
 }
 
 function getPitcherRowsForMatsumoto(pitcherName) {
-  const archiveRows = filterRowsByPitcher(historicalRows, pitcherName);
-  const currentRows = filterRowsByPitcher(allRows, pitcherName);
-  return dedupePlayRowsByGamePlay([...archiveRows, ...currentRows]);
+  return pitcherRowsByName.get(pitcherName) ?? [];
+}
+
+function getPitcherAnalyticsCacheKey(pitcherName) {
+  return `${pitcherName}|${firstPitchModeActive ? 'first-pitch' : 'all'}`;
+}
+
+function extractFirstPitchRows(rows) {
+  const firstByGame = new Map();
+
+  getChronologicalPitchRows(rows).forEach((entry) => {
+    const game = String(entry.row.Game ?? '').trim();
+    if (!game) {
+      return;
+    }
+
+    const existing = firstByGame.get(game);
+    if (!existing || entry.playOrder < existing.playOrder) {
+      firstByGame.set(game, entry);
+    }
+  });
+
+  return [...firstByGame.values()]
+    .sort((left, right) => left.playOrder - right.playOrder)
+    .map((entry) => entry.row);
+}
+
+function filterRowsForPitchScope(rows) {
+  if (!firstPitchModeActive) {
+    return rows;
+  }
+
+  return extractFirstPitchRows(rows);
+}
+
+function rebuildPitcherIndex() {
+  pitcherRowsByName = new Map();
+  pitcherAnalyticsByName = new Map();
+  const seasonSet = new Set(getMatsumotoSeasons());
+  const combinedRows = dedupePlayRowsByGamePlay([...historicalRows, ...allRows]);
+
+  combinedRows.forEach((row) => {
+    const season = parseGameSeason(row.Game);
+    if (season === null || !seasonSet.has(season)) {
+      return;
+    }
+
+    const pitcher = row[SHEET_CONFIG.filterColumn]?.trim();
+    if (!pitcher) {
+      return;
+    }
+
+    if (!pitcherRowsByName.has(pitcher)) {
+      pitcherRowsByName.set(pitcher, []);
+    }
+
+    pitcherRowsByName.get(pitcher).push(row);
+  });
+}
+
+function buildPitchNumberCounts(pitchRows) {
+  const counts = new Map();
+
+  pitchRows.forEach(({ pitchNumber }) => {
+    counts.set(pitchNumber, (counts.get(pitchNumber) ?? 0) + 1);
+  });
+
+  return counts;
+}
+
+function getFavouritePitchesFromCounts(counts) {
+  const ranked = [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .sort((left, right) => right[1] - left[1] || left[0] - right[0])
+    .map(([pitchNumber, count]) => ({ pitchNumber, count }));
+
+  if (ranked.length <= FAVOURITE_PITCHES_LIMIT) {
+    return ranked;
+  }
+
+  const cutoffIndex = FAVOURITE_PITCHES_LIMIT - 1;
+  const cutoffCount = ranked[cutoffIndex].count;
+  const nextCount = ranked[FAVOURITE_PITCHES_LIMIT].count;
+
+  const result = cutoffCount === nextCount
+    ? ranked.filter(({ count }) => count !== cutoffCount)
+    : ranked.slice(0, FAVOURITE_PITCHES_LIMIT);
+
+  return result.slice(0, FAVOURITE_PITCHES_LIMIT);
+}
+
+function getFavouriteMemesFromCounts(counts) {
+  return MEME_PITCH_NUMBERS
+    .map((pitchNumber) => ({
+      pitchNumber,
+      count: counts.get(pitchNumber) ?? 0,
+    }))
+    .filter(({ count }) => count > 0);
+}
+
+function getPitcherAnalytics(pitcherName) {
+  if (!pitcherName) {
+    return null;
+  }
+
+  const cacheKey = getPitcherAnalyticsCacheKey(pitcherName);
+  if (pitcherAnalyticsByName.has(cacheKey)) {
+    return pitcherAnalyticsByName.get(cacheKey);
+  }
+
+  const rows = getPitcherDisplayRows(pitcherName);
+  const allPitchRows = getChronologicalPitchRows(rows)
+    .sort((left, right) => left.playOrder - right.playOrder);
+  const visiblePitchRows = allPitchRows.length <= SPIRAL_VISIBLE_PITCH_COUNT
+    ? allPitchRows
+    : allPitchRows.slice(-SPIRAL_VISIBLE_PITCH_COUNT);
+  const pitchCounts = buildPitchNumberCounts(allPitchRows);
+
+  const analytics = {
+    rows,
+    allPitchRows,
+    visiblePitchRows,
+    pitchCounts,
+    bucketUsageStats: buildBucketUsageStats(allPitchRows),
+    attackZone: getAttackZoneFromPitchRows(allPitchRows),
+    favouritePitches: getFavouritePitchesFromCounts(pitchCounts),
+    favouriteMemes: getFavouriteMemesFromCounts(pitchCounts),
+    overlays: null,
+  };
+
+  pitcherAnalyticsByName.set(cacheKey, analytics);
+  return analytics;
+}
+
+function getSpiralOverlays(pitcherName, pitcherRows, allPitchRows) {
+  const analytics = getPitcherAnalytics(pitcherName);
+
+  if (!analytics.overlays) {
+    if (firstPitchModeActive) {
+      analytics.overlays = {
+        forward: null,
+        proximity: buildSpiralFirstPitchOverlay(pitcherRows),
+      };
+    } else {
+      analytics.overlays = {
+        forward: buildSpiralForwardDeltaOverlay(pitcherRows, allPitchRows),
+        proximity: buildSpiralProximityDeltaOverlay(pitcherRows, allPitchRows),
+      };
+    }
+  }
+
+  return analytics.overlays;
 }
 
 function getPitcherDisplayRows(pitcherName) {
-  const seasonSet = new Set(getMatsumotoSeasons());
-
-  return getPitcherRowsForMatsumoto(pitcherName).filter((row) => {
-    const season = parseGameSeason(row.Game);
-    return season !== null && seasonSet.has(season);
-  });
+  return filterRowsForPitchScope(getPitcherRowsForMatsumoto(pitcherName));
 }
 
 async function loadHistoricalPlays(forceRefresh = false) {
@@ -1153,10 +1379,22 @@ function filterChronologicalPitchRowsBySeasons(pitchRows, seasons) {
   });
 }
 
-function getSpiralPitchRows(pitcherRows) {
+function getAllSeasonPitchRows(pitcherRows) {
+  return getChronologicalPitchRows(pitcherRows);
+}
+
+function getSpiralVisiblePitchRows(pitcherRows) {
   const pitchRows = getChronologicalPitchRows(pitcherRows);
-  const recentGames = getRecentGameIds(pitcherRows, LIVE_SPIRAL_GAME_COUNT);
-  return filterChronologicalPitchRowsByGames(pitchRows, recentGames);
+
+  if (pitchRows.length <= SPIRAL_VISIBLE_PITCH_COUNT) {
+    return pitchRows;
+  }
+
+  return pitchRows.slice(-SPIRAL_VISIBLE_PITCH_COUNT);
+}
+
+function getSpiralPitchRows(pitcherRows) {
+  return getAllSeasonPitchRows(pitcherRows);
 }
 
 function getMatsumotoPitchRows(pitcherRows) {
@@ -1491,33 +1729,18 @@ function createChartCard(title, description) {
 }
 
 function getPitchNumberCounts(pitcherRows) {
-  const counts = new Map();
-
-  getChronologicalPitchRows(pitcherRows).forEach(({ pitchNumber }) => {
-    counts.set(pitchNumber, (counts.get(pitchNumber) ?? 0) + 1);
-  });
-
-  return counts;
+  return buildPitchNumberCounts(
+    getChronologicalPitchRows(pitcherRows)
+      .sort((left, right) => left.playOrder - right.playOrder),
+  );
 }
 
 function getFavouritePitches(pitcherRows) {
-  const counts = getPitchNumberCounts(pitcherRows);
-
-  return [...counts.entries()]
-    .filter(([, count]) => count > 1)
-    .sort((left, right) => right[1] - left[1] || left[0] - right[0])
-    .map(([pitchNumber, count]) => ({ pitchNumber, count }));
+  return getFavouritePitchesFromCounts(getPitchNumberCounts(pitcherRows));
 }
 
 function getFavouriteMemes(pitcherRows) {
-  const counts = getPitchNumberCounts(pitcherRows);
-
-  return MEME_PITCH_NUMBERS
-    .map((pitchNumber) => ({
-      pitchNumber,
-      count: counts.get(pitchNumber) ?? 0,
-    }))
-    .filter(({ count }) => count > 0);
+  return getFavouriteMemesFromCounts(getPitchNumberCounts(pitcherRows));
 }
 
 function appendPitchCountLine(container, labelText, entries, { showEmptyFallback = true } = {}) {
@@ -1549,27 +1772,30 @@ function appendPitchCountLine(container, labelText, entries, { showEmptyFallback
   container.appendChild(line);
 }
 
-function appendFavouritePitchesLine(container, pitcherRows) {
-  appendPitchCountLine(container, 'Favourite Pitches: ', getFavouritePitches(pitcherRows));
+function appendFavouritePitchesLine(container, favouritePitches) {
+  appendPitchCountLine(container, 'Favourite Pitches: ', favouritePitches);
 }
 
-function appendFavouriteMemesLine(container, pitcherRows) {
-  appendPitchCountLine(container, 'Favourite Memes: ', getFavouriteMemes(pitcherRows));
+function appendFavouriteMemesLine(container, favouriteMemes) {
+  appendPitchCountLine(container, 'Favourite Memes: ', favouriteMemes);
 }
 
-function renderMatchupStatsInline(pitcherName, batterName, pitcherRows = []) {
+function renderMatchupStatsInline(pitcherName, batterName, pitcherAnalytics = null) {
   pitcherStatsEl?.replaceChildren();
   batterStatsEl?.replaceChildren();
 
   if (pitcherName && pitcherStatsEl) {
     const pitcher = playerStatsByName.get(pitcherName);
+    const analytics = pitcherAnalytics ?? getPitcherAnalytics(pitcherName);
     appendStatCells(
       pitcherStatsEl,
       getPlayerStatBlock(pitcher, 'pitching'),
       PITCHING_STAT_FIELDS,
     );
-    appendFavouritePitchesLine(pitcherStatsEl, pitcherRows);
-    appendFavouriteMemesLine(pitcherStatsEl, pitcherRows);
+    if (analytics) {
+      appendFavouritePitchesLine(pitcherStatsEl, analytics.favouritePitches);
+      appendFavouriteMemesLine(pitcherStatsEl, analytics.favouriteMemes);
+    }
   }
 
   if (batterName && batterStatsEl) {
@@ -1605,6 +1831,123 @@ function getShortestPitchDelta(fromPitch, toPitch) {
 
 function getPitchTravelDelta(fromPitch, toPitch) {
   return Math.abs(getShortestPitchDelta(fromPitch, toPitch));
+}
+
+function getClockwisePitchDistance(fromPitch, toPitch) {
+  let delta = toPitch - fromPitch;
+
+  if (delta <= 0) {
+    delta += PITCH_MAX;
+  }
+
+  return delta;
+}
+
+function pitchAtClockwiseOffset(fromPitch, offset) {
+  return pitchFromDisplayDelta(fromPitch, offset);
+}
+
+function findWidestEmptyGapBoundaries(uniqueSortedPitches) {
+  if (uniqueSortedPitches.length === 0) {
+    return null;
+  }
+
+  if (uniqueSortedPitches.length === 1) {
+    const pitch = uniqueSortedPitches[0];
+    return {
+      clusterStart: pitch,
+      clusterEnd: pitch,
+      clusterArcLength: 0,
+    };
+  }
+
+  let widestGap = -1;
+  let gapStart = uniqueSortedPitches[0];
+  let gapEnd = uniqueSortedPitches[0];
+
+  for (let index = 0; index < uniqueSortedPitches.length; index += 1) {
+    const from = uniqueSortedPitches[index];
+    const to = uniqueSortedPitches[(index + 1) % uniqueSortedPitches.length];
+    const gap = index === uniqueSortedPitches.length - 1
+      ? (PITCH_MAX - from) + to
+      : to - from;
+
+    if (gap > widestGap) {
+      widestGap = gap;
+      gapStart = from;
+      gapEnd = to;
+    }
+  }
+
+  const clusterStart = gapEnd;
+  const clusterEnd = gapStart;
+
+  return {
+    clusterStart,
+    clusterEnd,
+    clusterArcLength: getClockwisePitchDistance(clusterStart, clusterEnd),
+  };
+}
+
+function computeFirstPitchGapCenteredStats(pitchNumbers) {
+  const uniqueSortedPitches = [...new Set(pitchNumbers)].sort((left, right) => left - right);
+  const boundaries = findWidestEmptyGapBoundaries(uniqueSortedPitches);
+
+  if (!boundaries) {
+    return null;
+  }
+
+  const { clusterStart, clusterEnd, clusterArcLength } = boundaries;
+
+  if (uniqueSortedPitches.length === 1) {
+    return {
+      anchorPitch: clusterStart,
+      minPitch: clusterStart,
+      q1Pitch: clusterStart,
+      medianPitch: clusterStart,
+      q3Pitch: clusterStart,
+      maxPitch: clusterStart,
+      stats: {
+        min: 0,
+        q1: 0,
+        median: 0,
+        q3: 0,
+        max: 0,
+      },
+    };
+  }
+
+  const arcOffsets = pitchNumbers.map((pitch) => (
+    getClockwisePitchDistance(clusterStart, pitch)
+  ));
+  const offsetStats = computeBoxPlotStats(arcOffsets);
+
+  if (!offsetStats) {
+    return null;
+  }
+
+  const anchorPitch = pitchAtClockwiseOffset(clusterStart, clusterArcLength / 2);
+  const minPitch = clusterStart;
+  const maxPitch = clusterEnd;
+  const q1Pitch = pitchAtClockwiseOffset(clusterStart, offsetStats.q1);
+  const medianPitch = pitchAtClockwiseOffset(clusterStart, offsetStats.median);
+  const q3Pitch = pitchAtClockwiseOffset(clusterStart, offsetStats.q3);
+
+  return {
+    anchorPitch,
+    minPitch,
+    q1Pitch,
+    medianPitch,
+    q3Pitch,
+    maxPitch,
+    stats: {
+      min: getShortestPitchDelta(anchorPitch, minPitch),
+      q1: getShortestPitchDelta(anchorPitch, q1Pitch),
+      median: getShortestPitchDelta(anchorPitch, medianPitch),
+      q3: getShortestPitchDelta(anchorPitch, q3Pitch),
+      max: getShortestPitchDelta(anchorPitch, maxPitch),
+    },
+  };
 }
 
 function getPitchRotationDirection(fromPitch, toPitch) {
@@ -1810,15 +2153,108 @@ function pitchLabelAngleOffsetToward(fromPitch, towardPitch, magnitude = 0.055) 
   return magnitude * Math.sign(delta);
 }
 
-function getReadableTangentRotation(angle) {
-  let rotation = angle;
+function offsetRadiusFraction(radiusFraction, maxRadius, pixelOffset) {
+  return radiusFraction + pixelOffset / maxRadius;
+}
 
-  // Flip on the lower semicircle so tangent labels stay upright (not upper-left).
-  if (angle > Math.PI / 2 && angle < (3 * Math.PI) / 2) {
-    rotation += Math.PI;
+function getOffsetBandGeometry(bandGeometry, maxRadius) {
+  return {
+    innerRadiusFraction: offsetRadiusFraction(
+      bandGeometry.innerRadiusFraction,
+      maxRadius,
+      DELTA_BAND_RADIUS_OFFSET_PX,
+    ),
+    outerRadiusFraction: offsetRadiusFraction(
+      bandGeometry.outerRadiusFraction,
+      maxRadius,
+      DELTA_BAND_RADIUS_OFFSET_PX,
+    ),
+    midRadiusFraction: offsetRadiusFraction(
+      bandGeometry.midRadiusFraction,
+      maxRadius,
+      DELTA_BAND_RADIUS_OFFSET_PX,
+    ),
+  };
+}
+
+function getRangeMarkerInnerRadiusFraction(maxRadius) {
+  return offsetRadiusFraction(
+    RANGE_MARKER_INNER_RADIUS,
+    maxRadius,
+    DELTA_BAND_RADIUS_OFFSET_PX,
+  );
+}
+
+function getRangeMarkerOuterRadiusFraction(maxRadius) {
+  return offsetRadiusFraction(
+    RANGE_MARKER_OUTER_RADIUS,
+    maxRadius,
+    DELTA_BAND_RADIUS_OFFSET_PX,
+  );
+}
+
+function getSituationMiniRadiusFraction(maxRadius) {
+  return offsetRadiusFraction(
+    SITUATION_MINI_RADIUS,
+    maxRadius,
+    DELTA_BAND_RADIUS_OFFSET_PX,
+  );
+}
+
+function normalizeSpiralAngle(angle) {
+  return ((angle % TWO_PI) + TWO_PI) % TWO_PI;
+}
+
+function shouldFlipTangentText(angle) {
+  const normalized = normalizeSpiralAngle(angle);
+  return normalized > Math.PI / 2 && normalized < (3 * Math.PI) / 2;
+}
+
+function isVerticalSpiralPole(normalized) {
+  return Math.abs(normalized - Math.PI / 2) < 1e-6
+    || Math.abs(normalized - (3 * Math.PI) / 2) < 1e-6;
+}
+
+function getBucketArcLabelRotation(angle) {
+  const normalized = normalizeSpiralAngle(angle);
+
+  if (
+    normalized > Math.PI / 2
+    && normalized < (3 * Math.PI) / 2
+    && !isVerticalSpiralPole(normalized)
+  ) {
+    return angle + Math.PI;
   }
 
-  return rotation;
+  return angle;
+}
+
+function shouldTraverseArcBackward(angle) {
+  const normalized = normalizeSpiralAngle(angle);
+  const cosAngle = Math.cos(normalized);
+  const sinAngle = Math.sin(normalized);
+
+  if (cosAngle < -1e-6) {
+    return true;
+  }
+
+  if (Math.abs(cosAngle) <= 1e-6 && sinAngle < -1e-6) {
+    return true;
+  }
+
+  return false;
+}
+
+function getReadableTangentRotation(angle) {
+  return shouldFlipTangentText(angle) ? angle + Math.PI : angle;
+}
+
+function getSpiralAxisLabelRadiusFraction(maxRadius) {
+  return SPIRAL_GUIDE_OUTER_RADIUS + SPIRAL_AXIS_LABEL_OFFSET_PX / maxRadius;
+}
+
+function getBucketUsageLabelRadiusPx(maxRadius) {
+  return getSpiralAxisLabelRadiusFraction(maxRadius) * maxRadius + BUCKET_USAGE_RADIUS_OFFSET_PX;
 }
 
 function getClockwiseTangentOffset(angle, amount) {
@@ -1961,8 +2397,8 @@ function buildSpiralDeltaOverlay(pitcherRows, spiralPitchRows, options = {}) {
     categoryLabel = getDeltaPlotCategoryMeta(category)?.label ?? category;
   }
 
-  const historyRows = getMatsumotoPitchRows(pitcherRows);
-  const historyChronological = [...historyRows].sort((a, b) => a.playOrder - b.playOrder);
+  const historyChronological = getChronologicalPitchRows(pitcherRows)
+    .sort((left, right) => left.playOrder - right.playOrder);
   const forwardDeltas = collectForwardPitchDeltas(historyChronological, {
     targetCategory: filterByCategory ? category : null,
     anchorPitch: proximityTolerance === null ? null : anchorPitch,
@@ -2019,6 +2455,51 @@ function buildSpiralProximityDeltaOverlay(pitcherRows, spiralPitchRows) {
   });
 }
 
+function buildSpiralFirstPitchOverlay(pitcherRows) {
+  const historyChronological = getChronologicalPitchRows(pitcherRows)
+    .sort((left, right) => left.playOrder - right.playOrder);
+
+  if (historyChronological.length === 0) {
+    return null;
+  }
+
+  const pitchNumbers = historyChronological.map((entry) => entry.pitchNumber);
+  const gapCenteredStats = computeFirstPitchGapCenteredStats(pitchNumbers);
+
+  if (!gapCenteredStats) {
+    return null;
+  }
+
+  const {
+    anchorPitch,
+    minPitch,
+    q1Pitch,
+    medianPitch,
+    q3Pitch,
+    maxPitch,
+    stats,
+  } = gapCenteredStats;
+
+  return {
+    anchorPitch,
+    stats,
+    minPitch,
+    q1Pitch,
+    medianPitch,
+    q3Pitch,
+    maxPitch,
+    latestResult: '',
+    category: null,
+    categoryLabel: 'First Pitches',
+    color: PROXIMITY_DELTA_BAND_COLOR,
+    sampleCount: pitchNumbers.length,
+    seasonCount: getMatsumotoSeasons().length,
+    scopeLabel: 'first-pitch',
+    proximityTolerance: null,
+    bandGeometry: getPrimaryDeltaBandGeometry(),
+  };
+}
+
 function formatForwardDeltaCaption(overlay) {
   const { stats, categoryLabel, seasonCount, sampleCount, scopeLabel, proximityTolerance } = overlay;
   const direction = stats.median === 0
@@ -2029,6 +2510,10 @@ function formatForwardDeltaCaption(overlay) {
 
   if (scopeLabel === 'proximity') {
     return `Next-pitch Δ · pitch ±${proximityTolerance} of latest · any result · median ${direction} · Q1–Q3 band · min–max whiskers · last ${seasonCount} season${seasonCount === 1 ? '' : 's'} · n=${sampleCount.toLocaleString()}`;
+  }
+
+  if (scopeLabel === 'first-pitch') {
+    return `First pitch distribution · gap-centered anchor ${overlay.anchorPitch} · median ${direction} · Q1–Q3 band · min–max at widest gap · last ${seasonCount} season${seasonCount === 1 ? '' : 's'} · n=${sampleCount.toLocaleString()}`;
   }
 
   return `Next-pitch Δ for ${categoryLabel} · median ${direction} · Q1–Q3 band · min–max whiskers · last ${seasonCount} season${seasonCount === 1 ? '' : 's'} · n=${sampleCount.toLocaleString()}`;
@@ -2050,7 +2535,7 @@ function drawSpiralDeltaOverlay(context, center, maxRadius, overlay) {
     innerRadiusFraction,
     outerRadiusFraction,
     midRadiusFraction,
-  } = bandGeometry;
+  } = getOffsetBandGeometry(bandGeometry, maxRadius);
   const tickOptions = {
     innerRadiusFraction,
     outerRadiusFraction,
@@ -2198,7 +2683,116 @@ function getConnectorLineDash(fromPoint, toPoint) {
   return [];
 }
 
-function drawSpiralGuide(context, center, maxRadius) {
+function buildBucketUsageStats(pitchRows) {
+  if (!pitchRows.length) {
+    return [];
+  }
+
+  const allTimeCounts = Array.from({ length: 10 }, () => 0);
+  pitchRows.forEach(({ pitchNumber }) => {
+    allTimeCounts[getPitchHundredBucketIndex(pitchNumber)] += 1;
+  });
+
+  const recentPitches = pitchRows.slice(-BUCKET_USAGE_RECENT_PITCH_COUNT);
+  const recentCounts = Array.from({ length: 10 }, () => 0);
+  recentPitches.forEach(({ pitchNumber }) => {
+    recentCounts[getPitchHundredBucketIndex(pitchNumber)] += 1;
+  });
+
+  return Array.from({ length: 10 }, (_, bucketIndex) => ({
+    bucketIndex,
+    midAngle: pitchNumberToAngle(bucketIndex * 100 + 50),
+    last100Pct: recentPitches.length
+      ? Math.round((recentCounts[bucketIndex] / recentPitches.length) * 100)
+      : 0,
+    allTimePct: Math.round((allTimeCounts[bucketIndex] / pitchRows.length) * 100),
+  }));
+}
+
+function formatBucketUsageLabels(stats) {
+  return [
+    `Last 100: ${stats.last100Pct}%`,
+    `All Time: ${stats.allTimePct}%`,
+  ];
+}
+
+function drawTextAlongArc(context, center, maxRadius, text, midAngle, radiusFraction, color, fontSize) {
+  context.save();
+  context.font = `600 ${fontSize}px "Segoe UI", system-ui, sans-serif`;
+  context.fillStyle = color;
+
+  const radius = radiusFraction * maxRadius;
+  const totalWidth = context.measureText(text).width;
+  const arcSpan = totalWidth / radius;
+  const traverseBackward = shouldTraverseArcBackward(midAngle);
+  const chars = [...text];
+  let angle = traverseBackward
+    ? midAngle + arcSpan / 2
+    : midAngle - arcSpan / 2;
+
+  for (const char of chars) {
+    const charWidth = context.measureText(char).width;
+    const charAngle = charWidth / radius;
+    const charMidAngle = traverseBackward
+      ? angle - charAngle / 2
+      : angle + charAngle / 2;
+    const point = polarToCanvas(charMidAngle, radiusFraction, center, maxRadius);
+    const rotation = getBucketArcLabelRotation(charMidAngle);
+
+    context.save();
+    context.translate(point.x, point.y);
+    context.rotate(rotation);
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(char, 0, 0);
+    context.restore();
+
+    angle += traverseBackward ? -charAngle : charAngle;
+  }
+
+  context.restore();
+}
+
+function drawSpiralBucketUsageLabels(context, center, maxRadius, bucketUsageStats) {
+  if (!bucketUsageStats.length) {
+    return;
+  }
+
+  context.save();
+  const fontSize = 9 * SPIRAL_TEXT_SCALE;
+  const centerRadiusPx = getBucketUsageLabelRadiusPx(maxRadius);
+  const lineHalfSeparationPx = (fontSize / 2) + (BUCKET_USAGE_LINE_GAP_PX / 2);
+  const recentRadiusFraction = (centerRadiusPx - lineHalfSeparationPx) / maxRadius;
+  const allTimeRadiusFraction = (centerRadiusPx + lineHalfSeparationPx) / maxRadius;
+
+  bucketUsageStats.forEach((stats) => {
+    const [recentLine, allTimeLine] = formatBucketUsageLabels(stats);
+    drawTextAlongArc(
+      context,
+      center,
+      maxRadius,
+      recentLine,
+      stats.midAngle,
+      recentRadiusFraction,
+      BUCKET_USAGE_LABEL_COLOR,
+      fontSize,
+    );
+    drawTextAlongArc(
+      context,
+      center,
+      maxRadius,
+      allTimeLine,
+      stats.midAngle,
+      allTimeRadiusFraction,
+      BUCKET_USAGE_LABEL_COLOR,
+      fontSize,
+    );
+  });
+
+  context.restore();
+}
+
+function drawSpiralGuide(context, center, maxRadius, bucketUsageStats = []) {
   context.save();
   context.strokeStyle = `${CHART_MUTED}, 0.12)`;
   context.lineWidth = 1;
@@ -2229,12 +2823,14 @@ function drawSpiralGuide(context, center, maxRadius) {
 
   for (let pitch = 0; pitch <= PITCH_MAX; pitch += 100) {
     const angle = pitchNumberToAngle(pitch);
-    const labelRadius = guideRadius + (16 * SPIRAL_TEXT_SCALE);
+    const labelRadius = getSpiralAxisLabelRadiusFraction(maxRadius) * maxRadius;
     const x = center + Math.sin(angle) * labelRadius;
     const y = center - Math.cos(angle) * labelRadius;
     const label = pitch === 0 ? '1000' : String(pitch);
     context.fillText(label, x, y);
   }
+
+  drawSpiralBucketUsageLabels(context, center, maxRadius, bucketUsageStats);
 
   context.restore();
 }
@@ -2308,6 +2904,152 @@ function drawSpiralPoint(context, point, isLatest) {
     context.arc(point.x, point.y, radius + 3, 0, TWO_PI);
     context.stroke();
   }
+}
+
+function traceAnnularBandByPitch(
+  context,
+  center,
+  maxRadius,
+  pitchA,
+  pitchB,
+  innerRadiusFraction,
+  outerRadiusFraction,
+) {
+  const steps = Math.max(4, Math.ceil(Math.abs(getShortestPitchDelta(pitchA, pitchB)) / 8));
+
+  context.beginPath();
+
+  for (let step = 0; step <= steps; step += 1) {
+    const pitchNumber = interpolatePitchNumber(pitchA, pitchB, step / steps);
+    const point = polarToCanvas(
+      pitchNumberToAngle(pitchNumber),
+      outerRadiusFraction,
+      center,
+      maxRadius,
+    );
+
+    if (step === 0) {
+      context.moveTo(point.x, point.y);
+    } else {
+      context.lineTo(point.x, point.y);
+    }
+  }
+
+  for (let step = steps; step >= 0; step -= 1) {
+    const pitchNumber = interpolatePitchNumber(pitchA, pitchB, step / steps);
+    const point = polarToCanvas(
+      pitchNumberToAngle(pitchNumber),
+      innerRadiusFraction,
+      center,
+      maxRadius,
+    );
+    context.lineTo(point.x, point.y);
+  }
+
+  context.closePath();
+}
+
+function drawRadialHatchInAnnularBand(
+  context,
+  center,
+  maxRadius,
+  pitchA,
+  pitchB,
+  innerRadiusFraction,
+  outerRadiusFraction,
+  hatchColor,
+) {
+  context.save();
+  traceAnnularBandByPitch(
+    context,
+    center,
+    maxRadius,
+    pitchA,
+    pitchB,
+    innerRadiusFraction,
+    outerRadiusFraction,
+  );
+  context.clip();
+
+  const pitchSpan = Math.abs(getShortestPitchDelta(pitchA, pitchB));
+  const steps = Math.max(6, Math.ceil(pitchSpan / ATTACK_ZONE_HATCH_PITCH_STEP));
+
+  context.strokeStyle = hatchColor;
+  context.lineWidth = 1.1;
+  context.lineCap = 'round';
+
+  for (let step = 0; step <= steps; step += 1) {
+    const pitchNumber = interpolatePitchNumber(pitchA, pitchB, step / steps);
+    const angle = pitchNumberToAngle(pitchNumber);
+    const inner = polarToCanvas(angle, innerRadiusFraction, center, maxRadius);
+    const outer = polarToCanvas(angle, outerRadiusFraction, center, maxRadius);
+
+    context.beginPath();
+    context.moveTo(inner.x, inner.y);
+    context.lineTo(outer.x, outer.y);
+    context.stroke();
+  }
+
+  context.restore();
+}
+
+function drawOuterAnnularBandByPitch(
+  context,
+  center,
+  maxRadius,
+  pitchA,
+  pitchB,
+  innerRadiusFraction,
+  outerRadiusFraction,
+  fillColor,
+  strokeColor = null,
+) {
+  context.fillStyle = fillColor;
+  traceAnnularBandByPitch(
+    context,
+    center,
+    maxRadius,
+    pitchA,
+    pitchB,
+    innerRadiusFraction,
+    outerRadiusFraction,
+  );
+  context.fill();
+
+  if (strokeColor) {
+    context.strokeStyle = strokeColor;
+    context.lineWidth = 1.5;
+    context.stroke();
+  }
+}
+
+function drawAttackZoneBand(context, center, maxRadius, attackMin, attackMax) {
+  context.save();
+
+  drawOuterAnnularBandByPitch(
+    context,
+    center,
+    maxRadius,
+    attackMin,
+    attackMax,
+    ATTACK_ZONE_BAND_INNER_RADIUS,
+    ATTACK_ZONE_BAND_OUTER_RADIUS,
+    ATTACK_ZONE_BAND_FILL,
+    ATTACK_ZONE_BAND_STROKE,
+  );
+
+  drawRadialHatchInAnnularBand(
+    context,
+    center,
+    maxRadius,
+    attackMin,
+    attackMax,
+    ATTACK_ZONE_BAND_INNER_RADIUS,
+    ATTACK_ZONE_BAND_OUTER_RADIUS,
+    ATTACK_ZONE_BAND_STROKE,
+  );
+
+  context.restore();
 }
 
 function drawHypotheticalSwing(context, center, maxRadius, swingNumber) {
@@ -2441,10 +3183,9 @@ function drawMiniSituationGraphic(
 }
 
 function drawRangeBoundaryTick(context, center, maxRadius, pitchNumber, lineColor) {
-  const markerStartRadius = RANGE_MARKER_INNER_RADIUS;
   const angle = pitchNumberToAngle(pitchNumber);
-  const start = polarToCanvas(angle, markerStartRadius, center, maxRadius);
-  const end = polarToCanvas(angle, RANGE_MARKER_OUTER_RADIUS, center, maxRadius);
+  const start = polarToCanvas(angle, getRangeMarkerInnerRadiusFraction(maxRadius), center, maxRadius);
+  const end = polarToCanvas(angle, getRangeMarkerOuterRadiusFraction(maxRadius), center, maxRadius);
 
   context.strokeStyle = lineColor;
   context.lineWidth = RANGE_BOUNDARY_TICK_WIDTH;
@@ -2501,7 +3242,7 @@ function drawRangeStartSituationMarkers(context, center, maxRadius, regions) {
       const labelAngle = pitchNumberToAngle(marker.pitchNumber);
       const labelPoint = polarToCanvas(
         labelAngle,
-        SITUATION_MINI_RADIUS,
+        getSituationMiniRadiusFraction(maxRadius),
         center,
         maxRadius,
       );
@@ -2530,25 +3271,34 @@ function drawPitchSpiralScene(
   points,
   forwardDeltaOverlay = null,
   proximityDeltaOverlay = null,
-  rangeTargetPitch = null,
+  attackZone = null,
   rangeRegions = [],
+  bucketUsageStats = [],
+  options = {},
 ) {
-  drawSpiralGuide(context, center, maxRadius);
+  const { skipConnectors = false } = options;
+  drawSpiralGuide(context, center, maxRadius, bucketUsageStats);
 
   context.lineWidth = 2;
   context.lineCap = 'round';
   context.lineJoin = 'round';
 
-  for (let index = 1; index < points.length; index += 1) {
-    const fromPoint = points[index - 1];
-    const toPoint = points[index];
-    const isTransition = fromPoint.game !== toPoint.game
-      || fromPoint.inning !== toPoint.inning;
+  if (!skipConnectors) {
+    for (let index = 1; index < points.length; index += 1) {
+      const fromPoint = points[index - 1];
+      const toPoint = points[index];
+      const isTransition = fromPoint.game !== toPoint.game
+        || fromPoint.inning !== toPoint.inning;
 
-    context.strokeStyle = isTransition
-      ? SPIRAL_TRANSITION_CONNECTOR_COLOR
-      : hexToRgba(fromPoint.color, SPIRAL_CONNECTOR_OPACITY);
-    drawSpiralConnector(context, fromPoint, toPoint, center, maxRadius);
+      context.strokeStyle = isTransition
+        ? SPIRAL_TRANSITION_CONNECTOR_COLOR
+        : hexToRgba(fromPoint.color, SPIRAL_CONNECTOR_OPACITY);
+      drawSpiralConnector(context, fromPoint, toPoint, center, maxRadius);
+    }
+  }
+
+  if (attackZone) {
+    drawAttackZoneBand(context, center, maxRadius, attackZone.attackMin, attackZone.attackMax);
   }
 
   points.forEach((point, index) => {
@@ -2563,16 +3313,16 @@ function drawPitchSpiralScene(
     drawSpiralDeltaOverlay(context, center, maxRadius, proximityDeltaOverlay);
   }
 
-  if (rangeRegions.length > 0 && rangeTargetPitch !== null) {
-    drawRangeMarkers(context, center, maxRadius, rangeRegions, rangeTargetPitch);
+  if (rangeRegions.length > 0 && attackZone) {
+    drawRangeMarkers(context, center, maxRadius, rangeRegions, attackZone.target);
   }
 
-  if (rangeRegions.length > 0 && rangeTargetPitch !== null) {
+  if (rangeRegions.length > 0 && attackZone) {
     drawRangeStartSituationMarkers(context, center, maxRadius, rangeRegions);
   }
 
-  if (rangeTargetPitch !== null) {
-    drawHypotheticalSwing(context, center, maxRadius, rangeTargetPitch);
+  if (attackZone) {
+    drawHypotheticalSwing(context, center, maxRadius, attackZone.target);
   }
 }
 
@@ -2596,7 +3346,29 @@ function appendDeltaOverlayLegendItem(parent, overlay, label) {
   parent.appendChild(item);
 }
 
-function renderSpiralLegend(categories, forwardDeltaOverlay = null, proximityDeltaOverlay = null) {
+function appendAttackZoneLegendItem(parent) {
+  const item = document.createElement('span');
+  item.className = 'result-legend-item';
+
+  const swatch = document.createElement('span');
+  swatch.className = 'result-legend-swatch result-legend-swatch--ring result-legend-swatch--attack-zone';
+  swatch.style.borderColor = ATTACK_ZONE_BAND_STROKE;
+
+  const text = document.createElement('span');
+  text.textContent = 'Attack Zone';
+
+  item.append(swatch, text);
+  parent.appendChild(item);
+}
+
+function renderSpiralLegend(
+  categories,
+  forwardDeltaOverlay = null,
+  proximityDeltaOverlay = null,
+  attackZone = null,
+  options = {},
+) {
+  const { firstPitchMode = false } = options;
   const legend = document.createElement('div');
   legend.className = 'result-legend result-legend--top';
 
@@ -2618,39 +3390,53 @@ function renderSpiralLegend(categories, forwardDeltaOverlay = null, proximityDel
     resultsRow.appendChild(item);
   });
 
-  [
-    { label: 'Inning change', swatchClass: 'connector-line-swatch connector-line-swatch--dotted' },
-    { label: 'Game change', swatchClass: 'connector-line-swatch connector-line-swatch--dashed' },
-  ].forEach(({ label, swatchClass }) => {
-    const item = document.createElement('span');
-    item.className = 'result-legend-item';
+  if (!firstPitchMode) {
+    [
+      { label: 'Inning change', swatchClass: 'connector-line-swatch connector-line-swatch--dotted' },
+      { label: 'Game change', swatchClass: 'connector-line-swatch connector-line-swatch--dashed' },
+    ].forEach(({ label, swatchClass }) => {
+      const item = document.createElement('span');
+      item.className = 'result-legend-item';
 
-    const swatch = document.createElement('span');
-    swatch.className = swatchClass;
+      const swatch = document.createElement('span');
+      swatch.className = swatchClass;
 
-    const text = document.createElement('span');
-    text.textContent = label;
+      const text = document.createElement('span');
+      text.textContent = label;
 
-    item.append(swatch, text);
-    resultsRow.appendChild(item);
-  });
+      item.append(swatch, text);
+      resultsRow.appendChild(item);
+    });
+  }
 
   legend.appendChild(resultsRow);
 
-  if (forwardDeltaOverlay || proximityDeltaOverlay) {
+  if (forwardDeltaOverlay || proximityDeltaOverlay || attackZone) {
     const overlayRow = document.createElement('div');
     overlayRow.className = 'result-legend-row';
 
-    appendDeltaOverlayLegendItem(
-      overlayRow,
-      forwardDeltaOverlay,
-      'Next Pitch Range by Result',
-    );
-    appendDeltaOverlayLegendItem(
-      overlayRow,
-      proximityDeltaOverlay,
-      'Next Pitch Range by Number',
-    );
+    if (attackZone) {
+      appendAttackZoneLegendItem(overlayRow);
+    }
+
+    if (firstPitchMode) {
+      appendDeltaOverlayLegendItem(
+        overlayRow,
+        proximityDeltaOverlay,
+        'First Pitches',
+      );
+    } else {
+      appendDeltaOverlayLegendItem(
+        overlayRow,
+        forwardDeltaOverlay,
+        'Next Pitch Range by Result',
+      );
+      appendDeltaOverlayLegendItem(
+        overlayRow,
+        proximityDeltaOverlay,
+        'Next Pitch Range by Number',
+      );
+    }
 
     legend.appendChild(overlayRow);
   }
@@ -2696,17 +3482,22 @@ function attachSpiralZoom(canvas, drawScene) {
   return { redraw };
 }
 
-function renderPitchSpiral(pitcherRows, pitcherName, batterName) {
+function renderPitchSpiral(pitcherAnalytics, pitcherName, batterName) {
   const card = createChartCard(
     'Spiral Scouting Graph',
-    'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Color shows result type; inner ring = next-pitch Δ by result category, outer grey ring = next-pitch Δ for any result when pitch # is ±50 of latest (seasons 11–13). Situation boundary ticks and icons appear when pitcher and batter are selected. Scroll to zoom.',
+    'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Shows the last 25 pitches; stats and overlays use all available seasons. Purple curved labels between axis ticks show each 100-pitch bucket’s share of the last 100 pitches vs all-time. Scroll to zoom.',
   );
   card.classList.add('chart-card--wide', 'chart-card--spiral');
 
-  const allPitchRows = getChronologicalPitchRows(pitcherRows);
-  const pitchRows = getSpiralPitchRows(pitcherRows);
+  const {
+    allPitchRows,
+    visiblePitchRows,
+    bucketUsageStats,
+    attackZone,
+    rows: pitcherRows,
+  } = pitcherAnalytics;
 
-  if (pitchRows.length === 0) {
+  if (allPitchRows.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'empty-state';
     empty.textContent = pitcherName
@@ -2718,28 +3509,32 @@ function renderPitchSpiral(pitcherRows, pitcherName, batterName) {
 
   const center = SPIRAL_CANVAS_SIZE / 2;
   const maxRadius = SPIRAL_CANVAS_SIZE * SPIRAL_RADIUS_SCALE;
-  const points = buildSpiralPoints(pitchRows, center, maxRadius);
-  const matsumotoSourceRows = getPitcherDisplayRows(pitcherName);
-  const forwardDeltaOverlay = buildSpiralForwardDeltaOverlay(matsumotoSourceRows, pitchRows);
-  const proximityDeltaOverlay = buildSpiralProximityDeltaOverlay(matsumotoSourceRows, pitchRows);
-  const rangeTargetPitch = getCombinedRangeMedianPitch(forwardDeltaOverlay, proximityDeltaOverlay);
+  const points = buildSpiralPoints(visiblePitchRows, center, maxRadius);
+  const { forward: forwardDeltaOverlay, proximity: proximityDeltaOverlay } = getSpiralOverlays(
+    pitcherName,
+    pitcherRows,
+    allPitchRows,
+  );
   const rangeTable = buildMatchupRangeTable(pitcherName, batterName);
   const baseSituation = getSituationState();
-  const rangeRegions = rangeTargetPitch !== null && rangeTable
-    ? buildRangeSpiralMarkers(rangeTable.rows, rangeTargetPitch, baseSituation)
+  const rangeRegions = attackZone && rangeTable
+    ? buildRangeSpiralMarkers(rangeTable.rows, attackZone.target, baseSituation)
     : [];
   const rangeOverlaySummary = buildSpiralRangeOverlaySummary(
     forwardDeltaOverlay,
     proximityDeltaOverlay,
+    { firstPitchMode: firstPitchModeActive },
   );
   const swingSummary = buildSpiralSwingSummary(
-    rangeTargetPitch,
+    attackZone,
     rangeTable?.rows ?? null,
   );
   const legend = renderSpiralLegend(
     getActiveResultCategories(points),
     forwardDeltaOverlay,
     proximityDeltaOverlay,
+    attackZone,
+    { firstPitchMode: firstPitchModeActive },
   );
 
   const stage = document.createElement('div');
@@ -2751,20 +3546,25 @@ function renderPitchSpiral(pitcherRows, pitcherName, batterName) {
   const canvas = document.createElement('canvas');
   canvas.className = 'spiral-canvas';
   canvas.setAttribute('role', 'img');
-  const overlayLabels = [
-    forwardDeltaOverlay ? `${forwardDeltaOverlay.categoryLabel} category overlay` : null,
-    proximityDeltaOverlay ? `pitch ±${LIVE_PROXIMITY_PITCH_TOLERANCE} overlay` : null,
-  ].filter(Boolean);
+  const overlayLabels = firstPitchModeActive
+    ? (proximityDeltaOverlay ? ['First Pitches overlay'] : [])
+    : [
+      forwardDeltaOverlay ? `${forwardDeltaOverlay.categoryLabel} category overlay` : null,
+      proximityDeltaOverlay ? `pitch ±${LIVE_PROXIMITY_PITCH_TOLERANCE} overlay` : null,
+    ].filter(Boolean);
   canvas.setAttribute(
     'aria-label',
     overlayLabels.length > 0
-      ? `Spiral Scouting Graph for ${pitcherName} with ${pitchRows.length} pitches and ${overlayLabels.join(' and ')}.`
-      : `Spiral Scouting Graph for ${pitcherName} with ${pitchRows.length} pitches colored by result category.`,
+      ? `Spiral Scouting Graph for ${pitcherName} with last ${visiblePitchRows.length} of ${allPitchRows.length.toLocaleString()} pitches and ${overlayLabels.join(' and ')}.`
+      : `Spiral Scouting Graph for ${pitcherName} with last ${visiblePitchRows.length} of ${allPitchRows.length.toLocaleString()} pitches colored by result category.`,
   );
 
   canvasWrap.appendChild(canvas);
   canvasWrap.appendChild(createSpiralSwingOverlay(swingSummary));
   canvasWrap.appendChild(createSpiralRangeOverlay(rangeOverlaySummary));
+  if (firstPitchModeActive) {
+    canvasWrap.appendChild(createSpiralFirstPitchModeOverlay());
+  }
   stage.append(legend, canvasWrap);
 
   const spiralController = attachSpiralZoom(canvas, (context) => {
@@ -2775,8 +3575,10 @@ function renderPitchSpiral(pitcherRows, pitcherName, batterName) {
       points,
       forwardDeltaOverlay,
       proximityDeltaOverlay,
-      rangeTargetPitch,
+      attackZone,
       rangeRegions,
+      bucketUsageStats,
+      { skipConnectors: firstPitchModeActive },
     );
   });
   spiralRedraw = spiralController.redraw;
@@ -2785,11 +3587,10 @@ function renderPitchSpiral(pitcherRows, pitcherName, batterName) {
   meta.className = 'spiral-legend';
   const metaParts = [];
 
-  if (pitchRows.length < allPitchRows.length) {
-    const recentGames = getRecentGameIds(pitcherRows, LIVE_SPIRAL_GAME_COUNT);
-    metaParts.push(`Last ${recentGames.length} game${recentGames.length === 1 ? '' : 's'} · ${pitchRows.length.toLocaleString()} of ${allPitchRows.length.toLocaleString()} pitches`);
-  } else {
-    metaParts.push(`${pitchRows.length.toLocaleString()} pitches`);
+  metaParts.push(`${allPitchRows.length.toLocaleString()} pitches · last ${visiblePitchRows.length} shown`);
+
+  if (firstPitchModeActive) {
+    metaParts.push('first pitch mode · one pitch per game');
   }
 
   if (forwardDeltaOverlay) {
@@ -2804,7 +3605,9 @@ function renderPitchSpiral(pitcherRows, pitcherName, batterName) {
     metaParts.push(`projected situation bands · ${rangeRegions.length} situations`);
   }
 
-  metaParts.push('scroll to zoom · white ring marks most recent pitch');
+  metaParts.push(firstPitchModeActive
+    ? 'scroll to zoom · white ring marks most recent first pitch'
+    : 'scroll to zoom · white ring marks most recent pitch');
   meta.textContent = metaParts.join(' · ');
   stage.appendChild(meta);
   card.appendChild(stage);
@@ -2876,9 +3679,22 @@ function getSituationState() {
  * function getManualSituationState() { ... }
  */
 
-function renderDashboard(pitcherRows, pitcherName, batterName) {
+function renderDashboard(pitcherAnalytics, pitcherName, batterName) {
   spiralRedraw = null;
-  chartGrid.replaceChildren(renderPitchSpiral(pitcherRows, pitcherName, batterName));
+
+  if (!pitcherAnalytics || pitcherAnalytics.allPitchRows.length === 0) {
+    chartGrid.replaceChildren();
+    return;
+  }
+
+  const loading = document.createElement('p');
+  loading.className = 'empty-state';
+  loading.textContent = 'Rendering spiral graph...';
+  chartGrid.replaceChildren(loading);
+
+  requestAnimationFrame(() => {
+    chartGrid.replaceChildren(renderPitchSpiral(pitcherAnalytics, pitcherName, batterName));
+  });
 }
 
 function updateDashboard() {
@@ -2903,13 +3719,14 @@ function updateDashboard() {
   }
 
   const filteredRows = getPitcherDisplayRows(selectedPitcher);
+  const pitcherAnalytics = getPitcherAnalytics(selectedPitcher);
   const batters = getAvailableBatters();
   populateBatterDropdown(batters, filteredRows);
 
   const selectedBatter = batterSelect.value;
   rowCountEl.textContent = `${filteredRows.length.toLocaleString()} plays`;
-  renderMatchupStatsInline(selectedPitcher, selectedBatter, filteredRows);
-  renderDashboard(filteredRows, selectedPitcher, selectedBatter);
+  renderMatchupStatsInline(selectedPitcher, selectedBatter, pitcherAnalytics);
+  renderDashboard(pitcherAnalytics, selectedPitcher, selectedBatter);
 }
 
 async function loadSheetData({ forceRefresh = false } = {}) {
@@ -2917,10 +3734,12 @@ async function loadSheetData({ forceRefresh = false } = {}) {
     return;
   }
 
+  isLoadingSheet = true;
   setSyncLoading(true);
   setStatus(forceRefresh ? 'Syncing sheet data...' : 'Loading sheet data...');
 
   try {
+    const historicalPromise = loadHistoricalPlays(forceRefresh);
     const [playsResponse, playerStats, gamesMatrix, datesMatrix] = await Promise.all([
       fetch(getSheetCsvUrl(SHEET_CONFIG.sheetName, { bustCache: forceRefresh }), {
         cache: forceRefresh ? 'no-store' : 'default',
@@ -2943,12 +3762,20 @@ async function loadSheetData({ forceRefresh = false } = {}) {
     const playsCsvText = await playsResponse.text();
     const playsMatrix = parseCsv(playsCsvText);
     allRows = parsePlaysMatrix(playsMatrix).map(normalizePlayRow);
-    historicalRows = await loadHistoricalPlays(forceRefresh);
     allGames = rowsToObjects(gamesMatrix);
     sessionDates = parseSessionDates(rowsToObjects(datesMatrix));
     playerStatsByName = playerStats;
+    historicalRows = [];
+    rebuildPitcherIndex();
     refreshLiveTargetGame();
+    updateDashboard();
+    setStatus(
+      `${forceRefresh ? 'Synced' : 'Loaded'} ${allRows.length.toLocaleString()} plays · loading historical...`,
+    );
 
+    historicalRows = await historicalPromise;
+    rebuildPitcherIndex();
+    refreshLiveTargetGame();
     updateDashboard();
     setStatus(
       `${forceRefresh ? 'Synced' : 'Loaded'} ${allRows.length.toLocaleString()} plays`
@@ -2959,12 +3786,18 @@ async function loadSheetData({ forceRefresh = false } = {}) {
     console.error(error);
     setStatus(`Failed to load sheet: ${error.message}`, true);
   } finally {
+    isLoadingSheet = false;
     setSyncLoading(false);
   }
 }
 
 pitcherSelect.addEventListener('change', updateDashboard);
 batterSelect.addEventListener('change', updateDashboard);
+firstPitchModeCheckbox?.addEventListener('change', () => {
+  firstPitchModeActive = firstPitchModeCheckbox.checked;
+  updateFirstPitchModeBanner();
+  updateDashboard();
+});
 
 /*
  * LEGACY event listeners:
@@ -2977,4 +3810,4 @@ batterSelect.addEventListener('change', updateDashboard);
  * situationPanel?.addEventListener('change', ...);
  */
 
-loadSheetData({ forceRefresh: true });
+loadSheetData({ forceRefresh: false });

@@ -206,6 +206,20 @@ body {
   color: var(--muted);
 }
 
+.game-situation-group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+.game-situation-group__body {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
 .hero-situation {
   flex-shrink: 0;
 }
@@ -214,6 +228,43 @@ body {
   width: clamp(5.5rem, 14vw, 7rem);
   height: auto;
   display: block;
+}
+
+.first-pitch-banner {
+  width: 100%;
+  padding: 0.32rem 0.45rem;
+  border-radius: 8px;
+  background: rgba(210, 45, 45, 0.94);
+  color: #fff;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  text-align: center;
+  text-transform: uppercase;
+  box-sizing: border-box;
+}
+
+.first-pitch-banner[hidden] {
+  display: none;
+}
+
+.first-pitch-mode-control {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.first-pitch-mode-control input {
+  accent-color: #d22d2d;
+  cursor: pointer;
 }
 
 .hero__logo {
@@ -821,6 +872,15 @@ select {
   height: 0.55rem;
 }
 
+.result-legend-swatch--attack-zone {
+  background-color: rgba(255, 130, 130, 0.08);
+  background-image: repeating-conic-gradient(
+    from 0deg at 50% 50%,
+    rgba(255, 130, 130, 0.72) 0deg 3deg,
+    transparent 3deg 16deg
+  );
+}
+
 .connector-line-swatch {
   width: 1.75rem;
   height: 0;
@@ -878,6 +938,17 @@ select {
   left: 0.75rem;
   min-width: 0;
   padding: 0.55rem 0.65rem;
+}
+
+.spiral-panel-overlay--first-pitch {
+  bottom: 0.75rem;
+  right: 0.75rem;
+  border-color: rgba(255, 100, 100, 0.45);
+  background: rgba(72, 18, 18, 0.82);
+  color: #ff8a8a;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .spiral-panel-overlay[hidden] {

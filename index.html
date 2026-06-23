@@ -52,19 +52,30 @@
                 <p id="live-game-context" class="live-game-context"></p>
               </div>
 
-              <div id="situation-graphic" class="hero-situation" aria-label="Runners on base and outs">
-                <svg
-                  class="situation-display"
-                  viewBox="27 14 46 50"
-                  role="img"
-                  aria-hidden="true"
-                >
-                  <polygon class="situation-base situation-base--second" points="50,21 58,29 50,37 42,29" />
-                  <polygon class="situation-base situation-base--third" points="41,30 49,38 41,46 33,38" />
-                  <polygon class="situation-base situation-base--first" points="59,30 67,38 59,46 51,38" />
-                  <circle class="situation-out situation-out--1" cx="44.75" cy="56" r="4.5" />
-                  <circle class="situation-out situation-out--2" cx="55.25" cy="56" r="4.5" />
-                </svg>
+              <div class="game-situation-group">
+                <div id="first-pitch-mode-banner" class="first-pitch-banner" hidden>
+                  First Pitch Mode is active
+                </div>
+                <div class="game-situation-group__body">
+                  <div id="situation-graphic" class="hero-situation" aria-label="Runners on base and outs">
+                    <svg
+                      class="situation-display"
+                      viewBox="27 14 46 50"
+                      role="img"
+                      aria-hidden="true"
+                    >
+                      <polygon class="situation-base situation-base--second" points="50,21 58,29 50,37 42,29" />
+                      <polygon class="situation-base situation-base--third" points="41,30 49,38 41,46 33,38" />
+                      <polygon class="situation-base situation-base--first" points="59,30 67,38 59,46 51,38" />
+                      <circle class="situation-out situation-out--1" cx="44.75" cy="56" r="4.5" />
+                      <circle class="situation-out situation-out--2" cx="55.25" cy="56" r="4.5" />
+                    </svg>
+                  </div>
+                  <label class="first-pitch-mode-control" for="first-pitch-mode">
+                    <input type="checkbox" id="first-pitch-mode" />
+                    First Pitch Mode
+                  </label>
+                </div>
               </div>
             </div>
 
