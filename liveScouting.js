@@ -247,19 +247,53 @@ export function inferSituationFromPlays(playRows, {
       playOrder: Number.parseInt(String(row.Play ?? '').trim(), 10),
     }))
     .filter((entry) => Number.isFinite(entry.playOrder))
-    .sort((a, b) => b.playOrder - a.playOrder);
+    .sort((a, b) => a.playOrder - b.playOrder);
 
-  const latest = relevantPlays[0]?.row;
-  if (!latest) {
+  if (relevantPlays.length === 0) {
     return emptySituation;
   }
 
-  const runners = decodeRunnerMask(latest.BRC);
-  const outs = Number.parseInt(String(latest.Outs ?? '').trim(), 10);
+  let situation = {
+    onFirst: false,
+    onSecond: false,
+    onThird: false,
+    outs: 0,
+  };
+  let appliedResult = false;
+
+  relevantPlays.forEach(({ row }) => {
+    const result = String(row.Result ?? '').trim();
+    if (!result) {
+      return;
+    }
+
+    situation = projectPlayOutcome(situation, result).situation;
+    appliedResult = true;
+  });
+
+  const latest = relevantPlays[relevantPlays.length - 1].row;
+
+  if (!appliedResult) {
+    const runners = decodeRunnerMask(latest.BRC);
+    const rawOuts = Number.parseInt(String(latest.Outs ?? '').trim(), 10);
+
+    if (Number.isFinite(rawOuts) && rawOuts >= 3) {
+      situation = {
+        onFirst: false,
+        onSecond: false,
+        onThird: false,
+        outs: 0,
+      };
+    } else {
+      situation = {
+        ...runners,
+        outs: normalizeOuts(rawOuts),
+      };
+    }
+  }
 
   return {
-    ...runners,
-    outs: Number.isFinite(outs) ? Math.min(2, Math.max(0, outs)) : 0,
+    ...situation,
     source: 'inferred',
     play: String(latest.Play ?? '').trim(),
     inning: String(latest.Inning ?? '').trim(),

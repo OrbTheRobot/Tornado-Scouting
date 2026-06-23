@@ -1433,6 +1433,13 @@ function getRecentChronologicalPitchRows(rows) {
     .sort((a, b) => a.playOrder - b.playOrder);
 }
 
+function isOutResult(code) {
+  return OUT_RESULTS.has(code)
+    || code.startsWith('DP')
+    || code === 'LODP'
+    || code === 'LOTP';
+}
+
 function normalizeResultCategory(result) {
   const code = result?.trim() || '';
 
@@ -1448,7 +1455,7 @@ function normalizeResultCategory(result) {
     return 'Base Hit';
   }
 
-  if (OUT_RESULTS.has(code)) {
+  if (isOutResult(code)) {
     return 'Out';
   }
 
