@@ -47,17 +47,16 @@ const ATTACK_ZONE_BAND_STROKE = 'rgba(255, 130, 130, 0.72)';
 const ATTACK_ZONE_HATCH_PITCH_STEP = 4;
 const SPIRAL_GUIDE_OUTER_RADIUS = SPIRAL_MAX_RADIUS + 0.08;
 const SPIRAL_AXIS_LABEL_OFFSET_PX = 16 * SPIRAL_TEXT_SCALE;
-const BUCKET_USAGE_LABEL_COLOR = 'rgba(176, 156, 196, 0.95)';
-const BUCKET_USAGE_RADIUS_OFFSET_PX = -4;
-const BUCKET_USAGE_LINE_GAP_PX = 2;
-const PITCH_DENSITY_BIN_COUNT = 250;
-const PITCH_DENSITY_KERNEL_SIGMA_BINS = 9;
-const PITCH_DENSITY_KERNEL_RADIUS_BINS = 24;
-const PITCH_DENSITY_SAMPLE_COUNT = 360;
+const PITCH_DENSITY_BUCKET_SIZE = 50;
+const PITCH_DENSITY_BUCKET_COUNT = PITCH_MAX / PITCH_DENSITY_BUCKET_SIZE;
 const PITCH_DENSITY_BASE_RADIUS = 0.055;
 const PITCH_DENSITY_MAX_BUMP = 0.52;
-const PITCH_DENSITY_STROKE_COLOR = 'rgba(156, 136, 186, 0.82)';
-const PITCH_DENSITY_FILL_COLOR = 'rgba(156, 136, 186, 0.14)';
+const PITCH_DENSITY_SMOOTH_SEGMENTS = 12;
+const PITCH_DENSITY_LINE_WIDTH = 2.5;
+const PITCH_DENSITY_LINE_COLOR = 'rgba(156, 136, 186, 0.82)';
+const PITCH_DENSITY_RECENT_PITCH_COUNT = BUCKET_USAGE_RECENT_PITCH_COUNT;
+const PITCH_DENSITY_RECENT_LINE_COLOR = 'rgba(53, 191, 165, 0.82)';
+const PITCH_DENSITY_RECENT_RADIUS_LANE_OFFSET = -0.014;
 const SPIRAL_GUIDE_LABEL_CLEARANCE = 0.105;
 const DELTA_BAND_THICKNESS = 0.038;
 const DELTA_BAND_GAP = 0.012;
@@ -540,6 +539,17 @@ function parseSwingNumber(value) {
 
 function getPitchHundredBucketIndex(pitchNumber) {
   return Math.floor((pitchNumber - 1) / 100);
+}
+
+function getPitchDensityBucketIndex(pitchNumber) {
+  return Math.floor((pitchNumber - 1) / PITCH_DENSITY_BUCKET_SIZE);
+}
+
+function getPitchDensityBucketMidPitch(bucketIndex) {
+  return Math.min(
+    PITCH_MAX,
+    (bucketIndex * PITCH_DENSITY_BUCKET_SIZE) + Math.floor(PITCH_DENSITY_BUCKET_SIZE / 2) + 1,
+  );
 }
 
 function getPitchHundredBucketBounds(bucketIndex) {
@@ -1271,8 +1281,18 @@ function getPitcherAnalytics(pitcherName) {
     allPitchRows,
     visiblePitchRows,
     pitchCounts,
-    bucketUsageStats: buildBucketUsageStats(allPitchRows),
-    pitchDensityProfile: buildPitchDensityProfile(allPitchRows),
+    pitchDensityProfiles: {
+      allTime: buildPitchDensityProfile(allPitchRows, {
+        lineColor: PITCH_DENSITY_LINE_COLOR,
+      }),
+      recent: buildPitchDensityProfile(
+        allPitchRows.slice(-PITCH_DENSITY_RECENT_PITCH_COUNT),
+        {
+          lineColor: PITCH_DENSITY_RECENT_LINE_COLOR,
+          radiusLaneOffset: PITCH_DENSITY_RECENT_RADIUS_LANE_OFFSET,
+        },
+      ),
+    },
     attackZone: getAttackZoneFromPitchRows(allPitchRows),
     favouritePitches: getFavouritePitchesFromCounts(pitchCounts),
     favouriteMemes: getFavouriteMemesFromCounts(pitchCounts),
@@ -2228,51 +2248,12 @@ function shouldFlipTangentText(angle) {
   return normalized > Math.PI / 2 && normalized < (3 * Math.PI) / 2;
 }
 
-function isVerticalSpiralPole(normalized) {
-  return Math.abs(normalized - Math.PI / 2) < 1e-6
-    || Math.abs(normalized - (3 * Math.PI) / 2) < 1e-6;
-}
-
-function getBucketArcLabelRotation(angle) {
-  const normalized = normalizeSpiralAngle(angle);
-
-  if (
-    normalized > Math.PI / 2
-    && normalized < (3 * Math.PI) / 2
-    && !isVerticalSpiralPole(normalized)
-  ) {
-    return angle + Math.PI;
-  }
-
-  return angle;
-}
-
-function shouldTraverseArcBackward(angle) {
-  const normalized = normalizeSpiralAngle(angle);
-  const cosAngle = Math.cos(normalized);
-  const sinAngle = Math.sin(normalized);
-
-  if (cosAngle < -1e-6) {
-    return true;
-  }
-
-  if (Math.abs(cosAngle) <= 1e-6 && sinAngle < -1e-6) {
-    return true;
-  }
-
-  return false;
-}
-
 function getReadableTangentRotation(angle) {
   return shouldFlipTangentText(angle) ? angle + Math.PI : angle;
 }
 
 function getSpiralAxisLabelRadiusFraction(maxRadius) {
   return SPIRAL_GUIDE_OUTER_RADIUS + SPIRAL_AXIS_LABEL_OFFSET_PX / maxRadius;
-}
-
-function getBucketUsageLabelRadiusPx(maxRadius) {
-  return getSpiralAxisLabelRadiusFraction(maxRadius) * maxRadius + BUCKET_USAGE_RADIUS_OFFSET_PX;
 }
 
 function getClockwiseTangentOffset(angle, amount) {
@@ -2701,251 +2682,151 @@ function getConnectorLineDash(fromPoint, toPoint) {
   return [];
 }
 
-function buildBucketUsageStats(pitchRows) {
-  if (!pitchRows.length) {
-    return [];
-  }
-
-  const allTimeCounts = Array.from({ length: 10 }, () => 0);
-  pitchRows.forEach(({ pitchNumber }) => {
-    allTimeCounts[getPitchHundredBucketIndex(pitchNumber)] += 1;
-  });
-
-  const recentPitches = pitchRows.slice(-BUCKET_USAGE_RECENT_PITCH_COUNT);
-  const recentCounts = Array.from({ length: 10 }, () => 0);
-  recentPitches.forEach(({ pitchNumber }) => {
-    recentCounts[getPitchHundredBucketIndex(pitchNumber)] += 1;
-  });
-
-  return Array.from({ length: 10 }, (_, bucketIndex) => ({
-    bucketIndex,
-    midAngle: pitchNumberToAngle(bucketIndex * 100 + 50),
-    last100Pct: recentPitches.length
-      ? Math.round((recentCounts[bucketIndex] / recentPitches.length) * 100)
-      : 0,
-    allTimePct: Math.round((allTimeCounts[bucketIndex] / pitchRows.length) * 100),
-  }));
-}
-
-function formatBucketUsageLabels(stats) {
-  return [
-    `Last 100: ${stats.last100Pct}%`,
-    `All Time: ${stats.allTimePct}%`,
-  ];
-}
-
-function buildCircularGaussianKernel(sigma, radius) {
-  const kernel = [];
-
-  for (let offset = -radius; offset <= radius; offset += 1) {
-    kernel.push(Math.exp(-(offset * offset) / (2 * sigma * sigma)));
-  }
-
-  return kernel;
-}
-
-function circularConvolve1d(values, kernel) {
-  const length = values.length;
-  const radius = Math.floor(kernel.length / 2);
-  const result = new Float64Array(length);
-
-  for (let index = 0; index < length; index += 1) {
-    let sum = 0;
-    let weightSum = 0;
-
-    for (let offset = -radius; offset <= radius; offset += 1) {
-      const sampleIndex = ((index + offset) % length + length) % length;
-      const weight = kernel[offset + radius];
-      sum += values[sampleIndex] * weight;
-      weightSum += weight;
-    }
-
-    result[index] = weightSum > 0 ? sum / weightSum : 0;
-  }
-
-  return result;
-}
-
-function pitchNumberToDensityBinPosition(pitchNumber) {
-  return ((pitchNumber - 1) / PITCH_MAX) * PITCH_DENSITY_BIN_COUNT;
-}
-
-function sampleCircularArray(values, position) {
-  const length = values.length;
-  const wrapped = ((position % length) + length) % length;
-  const lower = Math.floor(wrapped);
-  const upper = (lower + 1) % length;
-  const progress = wrapped - lower;
-
-  return values[lower] * (1 - progress) + values[upper] * progress;
-}
-
-function buildPitchDensityProfile(pitchRows) {
+function buildPitchDensityProfile(pitchRows, {
+  baseRadius = PITCH_DENSITY_BASE_RADIUS,
+  maxBump = PITCH_DENSITY_MAX_BUMP,
+  radiusLaneOffset = 0,
+  lineColor = PITCH_DENSITY_LINE_COLOR,
+} = {}) {
   if (!pitchRows.length) {
     return null;
   }
 
-  const counts = new Float64Array(PITCH_DENSITY_BIN_COUNT);
+  const counts = Array.from({ length: PITCH_DENSITY_BUCKET_COUNT }, () => 0);
   pitchRows.forEach(({ pitchNumber }) => {
-    const binIndex = Math.min(
-      PITCH_DENSITY_BIN_COUNT - 1,
-      Math.floor(pitchNumberToDensityBinPosition(pitchNumber)),
-    );
-    counts[binIndex] += 1;
+    counts[getPitchDensityBucketIndex(pitchNumber)] += 1;
   });
 
-  const kernel = buildCircularGaussianKernel(
-    PITCH_DENSITY_KERNEL_SIGMA_BINS,
-    PITCH_DENSITY_KERNEL_RADIUS_BINS,
-  );
-  const smoothed = circularConvolve1d(counts, kernel);
-  const samples = [];
+  const maxCount = Math.max(...counts);
+  if (maxCount <= 0) {
+    return null;
+  }
 
-  for (let index = 0; index < PITCH_DENSITY_SAMPLE_COUNT; index += 1) {
-    const pitchNumber = 1 + (index / PITCH_DENSITY_SAMPLE_COUNT) * (PITCH_MAX - 1);
-    const density = sampleCircularArray(smoothed, pitchNumberToDensityBinPosition(pitchNumber));
-    samples.push({
+  const buckets = counts.map((count, bucketIndex) => {
+    const pitchNumber = getPitchDensityBucketMidPitch(bucketIndex);
+    const normalized = count / maxCount;
+
+    return {
+      bucketIndex,
       pitchNumber,
       angle: pitchNumberToAngle(pitchNumber),
-      density,
-    });
-  }
-
-  const maxDensity = Math.max(...samples.map((sample) => sample.density));
-  if (maxDensity <= 0) {
-    return null;
-  }
-
-  samples.forEach((sample) => {
-    const normalized = sample.density / maxDensity;
-    sample.normalized = normalized;
-    sample.radiusFraction = PITCH_DENSITY_BASE_RADIUS + (PITCH_DENSITY_MAX_BUMP * normalized);
+      count,
+      normalized,
+      radiusFraction: baseRadius + radiusLaneOffset + (maxBump * normalized),
+    };
   });
 
   return {
-    samples,
-    maxDensity,
+    buckets,
+    maxCount,
     sampleCount: pitchRows.length,
+    lineColor,
   };
 }
 
-function drawPitchDensityRing(context, center, maxRadius, pitchDensityProfile) {
-  if (!pitchDensityProfile?.samples?.length) {
+function catmullRomPoint(p0, p1, p2, p3, t) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+
+  return {
+    x: 0.5 * (
+      (2 * p1.x)
+      + (-p0.x + p2.x) * t
+      + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2
+      + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+    ),
+    y: 0.5 * (
+      (2 * p1.y)
+      + (-p0.y + p2.y) * t
+      + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2
+      + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
+    ),
+  };
+}
+
+function buildClosedCatmullRomPoints(points, segmentsPerSpan = PITCH_DENSITY_SMOOTH_SEGMENTS) {
+  const count = points.length;
+
+  if (count === 0) {
+    return [];
+  }
+
+  if (count === 1) {
+    return [points[0]];
+  }
+
+  if (count === 2) {
+    return [...points, points[0]];
+  }
+
+  const smoothed = [];
+
+  for (let index = 0; index < count; index += 1) {
+    const p0 = points[(index - 1 + count) % count];
+    const p1 = points[index];
+    const p2 = points[(index + 1) % count];
+    const p3 = points[(index + 2) % count];
+
+    for (let step = 0; step < segmentsPerSpan; step += 1) {
+      smoothed.push(catmullRomPoint(p0, p1, p2, p3, step / segmentsPerSpan));
+    }
+  }
+
+  return smoothed;
+}
+
+function drawPitchDensityProfileLine(context, center, maxRadius, pitchDensityProfile) {
+  if (!pitchDensityProfile?.buckets?.length) {
     return;
   }
 
-  const { samples } = pitchDensityProfile;
+  const {
+    buckets,
+    lineColor = PITCH_DENSITY_LINE_COLOR,
+  } = pitchDensityProfile;
+
+  const controlPoints = buckets.map((bucket) => (
+    polarToCanvas(bucket.angle, bucket.radiusFraction, center, maxRadius)
+  ));
+  const smoothedPoints = buildClosedCatmullRomPoints(controlPoints);
+
+  if (smoothedPoints.length === 0) {
+    return;
+  }
 
   context.save();
   context.beginPath();
-
-  samples.forEach((sample, index) => {
-    const point = polarToCanvas(sample.angle, sample.radiusFraction, center, maxRadius);
+  smoothedPoints.forEach((point, index) => {
     if (index === 0) {
       context.moveTo(point.x, point.y);
     } else {
       context.lineTo(point.x, point.y);
     }
   });
-
-  for (let index = samples.length - 1; index >= 0; index -= 1) {
-    const point = polarToCanvas(
-      samples[index].angle,
-      PITCH_DENSITY_BASE_RADIUS,
-      center,
-      maxRadius,
-    );
-    context.lineTo(point.x, point.y);
-  }
-
   context.closePath();
-  context.fillStyle = PITCH_DENSITY_FILL_COLOR;
-  context.fill();
-  context.strokeStyle = PITCH_DENSITY_STROKE_COLOR;
-  context.lineWidth = 2.5;
+  context.strokeStyle = lineColor;
+  context.lineWidth = PITCH_DENSITY_LINE_WIDTH;
   context.lineJoin = 'round';
   context.lineCap = 'round';
   context.stroke();
   context.restore();
 }
 
-function drawTextAlongArc(context, center, maxRadius, text, midAngle, radiusFraction, color, fontSize) {
-  context.save();
-  context.font = `600 ${fontSize}px "Segoe UI", system-ui, sans-serif`;
-  context.fillStyle = color;
-
-  const radius = radiusFraction * maxRadius;
-  const totalWidth = context.measureText(text).width;
-  const arcSpan = totalWidth / radius;
-  const traverseBackward = shouldTraverseArcBackward(midAngle);
-  const chars = [...text];
-  let angle = traverseBackward
-    ? midAngle + arcSpan / 2
-    : midAngle - arcSpan / 2;
-
-  for (const char of chars) {
-    const charWidth = context.measureText(char).width;
-    const charAngle = charWidth / radius;
-    const charMidAngle = traverseBackward
-      ? angle - charAngle / 2
-      : angle + charAngle / 2;
-    const point = polarToCanvas(charMidAngle, radiusFraction, center, maxRadius);
-    const rotation = getBucketArcLabelRotation(charMidAngle);
-
-    context.save();
-    context.translate(point.x, point.y);
-    context.rotate(rotation);
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.fillText(char, 0, 0);
-    context.restore();
-
-    angle += traverseBackward ? -charAngle : charAngle;
-  }
-
-  context.restore();
-}
-
-function drawSpiralBucketUsageLabels(context, center, maxRadius, bucketUsageStats) {
-  if (!bucketUsageStats.length) {
+function drawPitchDensityLines(context, center, maxRadius, pitchDensityProfiles) {
+  if (!pitchDensityProfiles) {
     return;
   }
 
-  context.save();
-  const fontSize = 9 * SPIRAL_TEXT_SCALE;
-  const centerRadiusPx = getBucketUsageLabelRadiusPx(maxRadius);
-  const lineHalfSeparationPx = (fontSize / 2) + (BUCKET_USAGE_LINE_GAP_PX / 2);
-  const recentRadiusFraction = (centerRadiusPx - lineHalfSeparationPx) / maxRadius;
-  const allTimeRadiusFraction = (centerRadiusPx + lineHalfSeparationPx) / maxRadius;
+  if (pitchDensityProfiles.allTime) {
+    drawPitchDensityProfileLine(context, center, maxRadius, pitchDensityProfiles.allTime);
+  }
 
-  bucketUsageStats.forEach((stats) => {
-    const [recentLine, allTimeLine] = formatBucketUsageLabels(stats);
-    drawTextAlongArc(
-      context,
-      center,
-      maxRadius,
-      recentLine,
-      stats.midAngle,
-      recentRadiusFraction,
-      BUCKET_USAGE_LABEL_COLOR,
-      fontSize,
-    );
-    drawTextAlongArc(
-      context,
-      center,
-      maxRadius,
-      allTimeLine,
-      stats.midAngle,
-      allTimeRadiusFraction,
-      BUCKET_USAGE_LABEL_COLOR,
-      fontSize,
-    );
-  });
-
-  context.restore();
+  if (pitchDensityProfiles.recent) {
+    drawPitchDensityProfileLine(context, center, maxRadius, pitchDensityProfiles.recent);
+  }
 }
 
-function drawSpiralGuide(context, center, maxRadius, bucketUsageStats = []) {
+function drawSpiralGuide(context, center, maxRadius) {
   context.save();
   context.strokeStyle = `${CHART_MUTED}, 0.12)`;
   context.lineWidth = 1;
@@ -2982,8 +2863,6 @@ function drawSpiralGuide(context, center, maxRadius, bucketUsageStats = []) {
     const label = pitch === 0 ? '1000' : String(pitch);
     context.fillText(label, x, y);
   }
-
-  drawSpiralBucketUsageLabels(context, center, maxRadius, bucketUsageStats);
 
   context.restore();
 }
@@ -3426,13 +3305,12 @@ function drawPitchSpiralScene(
   proximityDeltaOverlay = null,
   attackZone = null,
   rangeRegions = [],
-  bucketUsageStats = [],
-  pitchDensityProfile = null,
+  pitchDensityProfiles = null,
   options = {},
 ) {
   const { skipConnectors = false } = options;
-  drawSpiralGuide(context, center, maxRadius, bucketUsageStats);
-  drawPitchDensityRing(context, center, maxRadius, pitchDensityProfile);
+  drawSpiralGuide(context, center, maxRadius);
+  drawPitchDensityLines(context, center, maxRadius, pitchDensityProfiles);
 
   context.lineWidth = 2;
   context.lineCap = 'round';
@@ -3516,16 +3394,16 @@ function appendAttackZoneLegendItem(parent) {
   parent.appendChild(item);
 }
 
-function appendPitchDensityLegendItem(parent) {
+function appendPitchDensityLegendItem(parent, label, lineColor) {
   const item = document.createElement('span');
   item.className = 'result-legend-item';
 
   const swatch = document.createElement('span');
   swatch.className = 'connector-line-swatch';
-  swatch.style.borderTopColor = PITCH_DENSITY_STROKE_COLOR;
+  swatch.style.borderTopColor = lineColor;
 
   const text = document.createElement('span');
-  text.textContent = 'Pitch Density';
+  text.textContent = label;
 
   item.append(swatch, text);
   parent.appendChild(item);
@@ -3538,7 +3416,7 @@ function renderSpiralLegend(
   attackZone = null,
   options = {},
 ) {
-  const { firstPitchMode = false, pitchDensityProfile = null } = options;
+  const { firstPitchMode = false, pitchDensityProfiles = null } = options;
   const legend = document.createElement('div');
   legend.className = 'result-legend result-legend--top';
 
@@ -3581,12 +3459,24 @@ function renderSpiralLegend(
 
   legend.appendChild(resultsRow);
 
-  if (pitchDensityProfile || forwardDeltaOverlay || proximityDeltaOverlay || attackZone) {
+  if (pitchDensityProfiles?.allTime || pitchDensityProfiles?.recent || forwardDeltaOverlay || proximityDeltaOverlay || attackZone) {
     const overlayRow = document.createElement('div');
     overlayRow.className = 'result-legend-row';
 
-    if (pitchDensityProfile) {
-      appendPitchDensityLegendItem(overlayRow);
+    if (pitchDensityProfiles?.allTime) {
+      appendPitchDensityLegendItem(
+        overlayRow,
+        'Pitch Density · All Time',
+        PITCH_DENSITY_LINE_COLOR,
+      );
+    }
+
+    if (pitchDensityProfiles?.recent) {
+      appendPitchDensityLegendItem(
+        overlayRow,
+        'Pitch Density · Last 100',
+        PITCH_DENSITY_RECENT_LINE_COLOR,
+      );
     }
 
     if (attackZone) {
@@ -3659,15 +3549,14 @@ function attachSpiralZoom(canvas, drawScene) {
 function renderPitchSpiral(pitcherAnalytics, pitcherName, batterName) {
   const card = createChartCard(
     'Tornado Graph',
-    'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Shows the last 25 pitches; stats and overlays use all available seasons. A smoothed pitch-density ring in the inner chart grows outward where that pitch number appears more often. Purple curved labels between axis ticks show each 100-pitch bucket’s share of the last 100 pitches vs all-time. Scroll to zoom.',
+    'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Shows the last 25 pitches; stats and overlays use all available seasons. Smoothed pitch-density curves trace each 50-pitch bucket: purple for all-time usage, teal for the last 100 pitches. Farther from center means more pitches in that bucket. Scroll to zoom.',
   );
   card.classList.add('chart-card--wide', 'chart-card--spiral');
 
   const {
     allPitchRows,
     visiblePitchRows,
-    bucketUsageStats,
-    pitchDensityProfile,
+    pitchDensityProfiles,
     attackZone,
     rows: pitcherRows,
   } = pitcherAnalytics;
@@ -3709,7 +3598,7 @@ function renderPitchSpiral(pitcherAnalytics, pitcherName, batterName) {
     forwardDeltaOverlay,
     proximityDeltaOverlay,
     attackZone,
-    { firstPitchMode: firstPitchModeActive, pitchDensityProfile },
+    { firstPitchMode: firstPitchModeActive, pitchDensityProfiles },
   );
 
   const stage = document.createElement('div');
@@ -3752,8 +3641,7 @@ function renderPitchSpiral(pitcherAnalytics, pitcherName, batterName) {
       proximityDeltaOverlay,
       attackZone,
       rangeRegions,
-      bucketUsageStats,
-      pitchDensityProfile,
+      pitchDensityProfiles,
       { skipConnectors: firstPitchModeActive },
     );
   });
@@ -3765,8 +3653,8 @@ function renderPitchSpiral(pitcherAnalytics, pitcherName, batterName) {
 
   metaParts.push(`${allPitchRows.length.toLocaleString()} pitches · last ${visiblePitchRows.length} shown`);
 
-  if (pitchDensityProfile) {
-    metaParts.push('smoothed pitch-density ring · all history by pitch number');
+  if (pitchDensityProfiles?.allTime || pitchDensityProfiles?.recent) {
+    metaParts.push('smoothed pitch-density curves · all time (purple) · last 100 (teal) · 50-pitch buckets');
   }
 
   if (firstPitchModeActive) {
