@@ -178,6 +178,13 @@ export function formatTargetGameLabel(targetGame, scoutTeam = 'SUN') {
   return `${statusLabel}: ${matchup} · Session ${session.sessionNumber} · vs ${opponentTeam || '—'}`;
 }
 
+const ROSTER_ELIGIBLE_STATUSES = new Set(['active', 'captain']);
+
+function isRosterEligibleStatus(status) {
+  const normalized = String(status ?? '').trim().toLowerCase();
+  return ROSTER_ELIGIBLE_STATUSES.has(normalized);
+}
+
 export function getRosterNames(playersByName, {
   team,
   role = 'all',
@@ -189,11 +196,15 @@ export function getRosterNames(playersByName, {
       return;
     }
 
-    if (player.status && player.status.toLowerCase() !== 'active') {
+    if (!isRosterEligibleStatus(player.status)) {
       return;
     }
 
     if (role === 'pitcher' && player.primary !== 'P') {
+      return;
+    }
+
+    if (role === 'batter' && player.primary === 'P') {
       return;
     }
 

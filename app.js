@@ -415,7 +415,7 @@ function getSpeculationBatters() {
 function getLiveScoutingBatters() {
   return getRosterNames(playerStatsByName, {
     team: SHEET_CONFIG.scoutTeamAbv,
-    role: 'all',
+    role: 'batter',
   });
 }
 

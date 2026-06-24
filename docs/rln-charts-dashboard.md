@@ -41,14 +41,14 @@ The app maps CSV headers to row objects and filters rows where `Pitcher` equals 
 
 | Mode | Pitcher dropdown | Batter dropdown | Game lock |
 | --- | --- | --- | --- |
-| **Live Scouting** (default) | Active pitchers on the opponent team for the locked SUN game | Active `SUN` roster players | Current live SUN game, or the next upcoming SUN game in the active session |
+| **Live Scouting** (default) | Active/Captain pitchers on the opponent team for the locked SUN game | Active/Captain `SUN` roster batters (`Primary` ≠ `P`) | Current live SUN game, or the next upcoming SUN game in the active session |
 | **Speculation** | Any pitcher with play data | Any player in the roster import | None |
 
 Live game resolution uses the **Dates** tab to find the current session (or the next upcoming session before the season starts) and the **Games** tab to find `SUN` matchups in that session. A game is treated as live when it has a `Start` time without `End`, or when converted plays exist for that `Game#` and the game is not finished. Otherwise the first unfinished SUN game in the session is used as the upcoming matchup. The controls bar shows the locked matchup label (for example `Upcoming: SUN @ HFX · Session 1 · vs HFX`). The tornado graph shows the last **25** pitches while stats and overlays use all available seasons.
 
 **First Pitch Mode** (checkbox beside the live situation diamond) filters all pitcher-scoped data to the earliest pitch per game for the selected pitcher. When active, a red banner appears on the situation box, pitch connectors are hidden, the **Next Pitch Range by Result** band is removed, and the value band becomes **First Pitches** centered on the widest empty arc between first-pitch numbers. A red **First Pitch Mode Active** label appears on the bottom-right of the spiral canvas.
 
-Player rosters for live mode come from the **Players** tab (`Team`, `Status`, `Primary`). Opponent pitchers are filtered to `Primary = P`. SUN batters include all active SUN roster players.
+Player rosters for live mode come from the **Players** tab (`Team`, `Status`, `Primary`). Roster eligibility uses `Status` of **Active** or **Captain** (excluding **GM Only** and other statuses). Opponent pitchers are filtered to `Primary = P`. SUN batters include eligible SUN roster players whose `Primary` position is not `P`.
 
 ## Situation panel and range table
 
