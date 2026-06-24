@@ -61,6 +61,9 @@ const PITCH_DENSITY_LINE_COLOR = 'rgba(156, 136, 186, 0.82)';
 const PITCH_DENSITY_RECENT_PITCH_COUNT = BUCKET_USAGE_RECENT_PITCH_COUNT;
 const PITCH_DENSITY_RECENT_LINE_COLOR = 'rgba(53, 191, 165, 0.82)';
 const PITCH_DENSITY_RECENT_RADIUS_LANE_OFFSET = -0.014;
+const PITCH_VALUE_BUCKET_SIZE = 100;
+const DELTA_BUCKET_SIZE = 50;
+const BATTER_BUCKET_RECENT_PITCH_COUNT = 100;
 const SPIRAL_GUIDE_LABEL_CLEARANCE = 0.105;
 const DELTA_BAND_THICKNESS = 0.038;
 const DELTA_BAND_GAP = 0.012;
@@ -169,6 +172,8 @@ const batterStatsEl = document.getElementById('batter-stats');
 const statusEl = document.getElementById('status');
 const rowCountEl = document.getElementById('row-count');
 const chartGrid = document.getElementById('chart-grid');
+const batterBucketPanelEl = document.getElementById('batter-bucket-panel');
+const attackZonePanelEl = document.getElementById('attack-zone-panel');
 
 /*
  * LEGACY UI (removed from page, kept for reference):
@@ -202,6 +207,10 @@ let isExportingPage = false;
 
 function isPitcherMode() {
   return pitcherModeActive;
+}
+
+function isBatterMode() {
+  return !pitcherModeActive;
 }
 
 function isLiveScoutingMode() {
@@ -710,6 +719,675 @@ function buildPitchDensityBucketCounts(pitchRows) {
   });
 
   return counts;
+}
+
+function getPitchValueBucketStart(pitchNumber, bucketSize = PITCH_VALUE_BUCKET_SIZE) {
+  return Math.floor(pitchNumber / bucketSize) * bucketSize;
+}
+
+function getDeltaBucketStart(delta, bucketSize = DELTA_BUCKET_SIZE) {
+  return Math.floor(delta / bucketSize) * bucketSize;
+}
+
+function formatBucketColumnLabel(bucketStart) {
+  return `${bucketStart}'s`;
+}
+
+function formatPitchValueBucketLabel(bucketStart) {
+  return formatBucketColumnLabel(bucketStart);
+}
+
+function formatDeltaBucketLabel(bucketStart) {
+  return formatBucketColumnLabel(bucketStart);
+}
+
+function getPitchValueBucketStarts(bucketSize = PITCH_VALUE_BUCKET_SIZE) {
+  const starts = [];
+  for (let start = 0; start <= PITCH_MAX; start += bucketSize) {
+    starts.push(start);
+  }
+  return starts;
+}
+
+function getDeltaBucketStarts(bucketSize = DELTA_BUCKET_SIZE) {
+  const starts = [];
+  for (let start = 0; start <= PITCH_MAX / 2; start += bucketSize) {
+    starts.push(start);
+  }
+  return starts;
+}
+
+function getSortedChronologicalPitchRows(pitchRows) {
+  return [...pitchRows].sort((left, right) => left.playOrder - right.playOrder);
+}
+
+function getLatestPitchAnchorBucket(pitchRows, bucketSize = PITCH_VALUE_BUCKET_SIZE) {
+  const chronological = getSortedChronologicalPitchRows(pitchRows);
+  if (chronological.length === 0) {
+    return null;
+  }
+
+  const latestPitchNumber = chronological[chronological.length - 1].pitchNumber;
+  return getPitchValueBucketStart(latestPitchNumber, bucketSize);
+}
+
+function buildPitchValueBucketTableRows(pitchRows, {
+  bucketSize = PITCH_VALUE_BUCKET_SIZE,
+  anchorBucketStart,
+  recentPitchCount = BATTER_BUCKET_RECENT_PITCH_COUNT,
+  filterByPreviousBucket = true,
+} = {}) {
+  if (filterByPreviousBucket && (anchorBucketStart === null || anchorBucketStart === undefined)) {
+    return null;
+  }
+
+  const bucketStarts = getPitchValueBucketStarts(bucketSize);
+  const chronological = getSortedChronologicalPitchRows(pitchRows);
+  const recentPlayOrders = new Set(
+    chronological.slice(-recentPitchCount).map((entry) => entry.playOrder),
+  );
+
+  const createEmptyCounts = () => new Map(bucketStarts.map((start) => [start, 0]));
+
+  const allCounts = createEmptyCounts();
+  const recentCounts = createEmptyCounts();
+
+  const startIndex = filterByPreviousBucket ? 1 : 0;
+  for (let index = startIndex; index < chronological.length; index += 1) {
+    const current = chronological[index];
+
+    if (filterByPreviousBucket) {
+      const previous = chronological[index - 1];
+      if (getPitchValueBucketStart(previous.pitchNumber, bucketSize) !== anchorBucketStart) {
+        continue;
+      }
+    }
+
+    const bucketStart = getPitchValueBucketStart(current.pitchNumber, bucketSize);
+    allCounts.set(bucketStart, (allCounts.get(bucketStart) ?? 0) + 1);
+
+    if (recentPlayOrders.has(current.playOrder)) {
+      recentCounts.set(bucketStart, (recentCounts.get(bucketStart) ?? 0) + 1);
+    }
+  }
+
+  return {
+    bucketStarts,
+    rows: [
+      { label: 'All pitches', counts: allCounts },
+      { label: 'Last 100 pitches', counts: recentCounts },
+    ],
+    anchorBucketLabel: formatPitchValueBucketLabel(anchorBucketStart, bucketSize),
+  };
+}
+
+function buildDeltaBucketTableRows(pitchRows, {
+  deltaBucketSize = DELTA_BUCKET_SIZE,
+  anchorBucketStart,
+  filterBucketSize = PITCH_VALUE_BUCKET_SIZE,
+  recentPitchCount = BATTER_BUCKET_RECENT_PITCH_COUNT,
+} = {}) {
+  if (anchorBucketStart === null || anchorBucketStart === undefined) {
+    return null;
+  }
+
+  const bucketStarts = getDeltaBucketStarts(deltaBucketSize);
+  const chronological = getSortedChronologicalPitchRows(pitchRows);
+  const recentPlayOrders = new Set(
+    chronological.slice(-recentPitchCount).map((entry) => entry.playOrder),
+  );
+
+  const createEmptyCounts = () => new Map(bucketStarts.map((start) => [start, 0]));
+
+  const allCounts = createEmptyCounts();
+  const recentCounts = createEmptyCounts();
+
+  for (let index = 1; index < chronological.length - 1; index += 1) {
+    const previous = chronological[index - 1];
+    const current = chronological[index];
+    const next = chronological[index + 1];
+
+    if (getPitchValueBucketStart(previous.pitchNumber, filterBucketSize) !== anchorBucketStart) {
+      continue;
+    }
+
+    const delta = Math.abs(getShortestPitchDelta(current.pitchNumber, next.pitchNumber));
+    const bucketStart = getDeltaBucketStart(delta, deltaBucketSize);
+
+    allCounts.set(bucketStart, (allCounts.get(bucketStart) ?? 0) + 1);
+
+    if (recentPlayOrders.has(current.playOrder)) {
+      recentCounts.set(bucketStart, (recentCounts.get(bucketStart) ?? 0) + 1);
+    }
+  }
+
+  return {
+    bucketStarts,
+    rows: [
+      { label: 'All pitches', counts: allCounts },
+      { label: 'Last 100 pitches', counts: recentCounts },
+    ],
+    anchorBucketLabel: formatPitchValueBucketLabel(anchorBucketStart, filterBucketSize),
+  };
+}
+
+function sumBucketCounts(counts, bucketStarts) {
+  return bucketStarts.reduce((total, start) => total + (counts.get(start) ?? 0), 0);
+}
+
+const BUCKET_TOP_HIGHLIGHT_OPACITIES = [0.6, 0.42, 0.27, 0.15];
+
+function getTopBucketHighlights(counts, bucketStarts) {
+  const ranked = bucketStarts
+    .map((bucketStart) => ({ bucketStart, count: counts.get(bucketStart) ?? 0 }))
+    .filter((entry) => entry.count > 0)
+    .sort((left, right) => right.count - left.count || left.bucketStart - right.bucketStart)
+    .slice(0, BUCKET_TOP_HIGHLIGHT_OPACITIES.length);
+
+  const highlights = new Map();
+  ranked.forEach((entry, rank) => {
+    highlights.set(entry.bucketStart, BUCKET_TOP_HIGHLIGHT_OPACITIES[rank]);
+  });
+
+  return highlights;
+}
+
+function formatBucketPercent(count, total) {
+  if (!total) {
+    return '0%';
+  }
+
+  return `${Math.round((count / total) * 100)}%`;
+}
+
+function getHighestPercentBucketStart(counts, bucketStarts) {
+  const total = sumBucketCounts(counts, bucketStarts);
+  if (!total) {
+    return null;
+  }
+
+  const ranked = bucketStarts
+    .map((bucketStart) => ({
+      bucketStart,
+      count: counts.get(bucketStart) ?? 0,
+    }))
+    .filter((entry) => entry.count > 0)
+    .sort((left, right) => right.count - left.count || left.bucketStart - right.bucketStart);
+
+  return ranked[0]?.bucketStart ?? null;
+}
+
+function buildExpectedBucketSummary(pitchValueTable, deltaTable) {
+  if (!pitchValueTable?.rows?.length) {
+    return null;
+  }
+
+  const formatLongBucket = (start, size) => `${start}-${start + size}`;
+  const [allPitchRow, recentPitchRow] = pitchValueTable.rows;
+
+  const pitchAllTimeStart = getHighestPercentBucketStart(
+    allPitchRow.counts,
+    pitchValueTable.bucketStarts,
+  );
+  const pitchLast100Start = getHighestPercentBucketStart(
+    recentPitchRow.counts,
+    pitchValueTable.bucketStarts,
+  );
+
+  const summary = {
+    expectedPitch: {
+      allTime: pitchAllTimeStart !== null
+        ? formatLongBucket(pitchAllTimeStart, PITCH_VALUE_BUCKET_SIZE)
+        : '—',
+      last100: pitchLast100Start !== null
+        ? formatLongBucket(pitchLast100Start, PITCH_VALUE_BUCKET_SIZE)
+        : '—',
+    },
+    expectedDiff: null,
+  };
+
+  if (deltaTable?.rows?.length) {
+    const [allDeltaRow, recentDeltaRow] = deltaTable.rows;
+    const deltaAllTimeStart = getHighestPercentBucketStart(
+      allDeltaRow.counts,
+      deltaTable.bucketStarts,
+    );
+    const deltaLast100Start = getHighestPercentBucketStart(
+      recentDeltaRow.counts,
+      deltaTable.bucketStarts,
+    );
+
+    summary.expectedDiff = {
+      allTime: deltaAllTimeStart !== null
+        ? formatLongBucket(deltaAllTimeStart, DELTA_BUCKET_SIZE)
+        : '—',
+      last100: deltaLast100Start !== null
+        ? formatLongBucket(deltaLast100Start, DELTA_BUCKET_SIZE)
+        : '—',
+    };
+  }
+
+  return summary;
+}
+
+function createExpectedBucketTable(summary) {
+  const table = document.createElement('table');
+  table.className = 'bucket-expected-table';
+
+  if (!summary) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.className = 'bucket-expected-table__empty';
+    cell.colSpan = 3;
+    cell.textContent = 'No expected bucket data.';
+    row.appendChild(cell);
+    table.appendChild(row);
+    return table;
+  }
+
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+
+  const corner = document.createElement('th');
+  corner.className = 'bucket-expected-table__corner';
+  corner.setAttribute('scope', 'col');
+  headerRow.appendChild(corner);
+
+  ['Last 100', 'All Time'].forEach((label) => {
+    const heading = document.createElement('th');
+    heading.className = 'bucket-expected-table__column';
+    heading.setAttribute('scope', 'col');
+    heading.textContent = label;
+    headerRow.appendChild(heading);
+  });
+
+  thead.appendChild(headerRow);
+  table.append(thead);
+
+  const tbody = document.createElement('tbody');
+  const summaryRows = [{ label: 'Expected Pitch', values: summary.expectedPitch }];
+  if (summary.expectedDiff) {
+    summaryRows.push({ label: 'Expected Δ', values: summary.expectedDiff });
+  }
+  summaryRows.forEach(({ label, values }) => {
+    const row = document.createElement('tr');
+
+    const rowLabel = document.createElement('th');
+    rowLabel.className = 'bucket-expected-table__row-label';
+    rowLabel.setAttribute('scope', 'row');
+    rowLabel.textContent = label;
+    row.appendChild(rowLabel);
+
+    [values.last100, values.allTime].forEach((value) => {
+      const cell = document.createElement('td');
+      cell.className = 'bucket-expected-table__value';
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
+
+    tbody.appendChild(row);
+  });
+
+  table.appendChild(tbody);
+  return table;
+}
+
+function createBucketCountTable(tableData, {
+  bucketLabelFormatter,
+  emptyMessage = 'No matching pitches.',
+}) {
+  const table = document.createElement('table');
+  table.className = 'bucket-count-table';
+
+  if (!tableData || tableData.bucketStarts.length === 0) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.className = 'bucket-count-table__empty';
+    cell.colSpan = 2;
+    cell.textContent = emptyMessage;
+    row.appendChild(cell);
+    table.appendChild(row);
+    return table;
+  }
+
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+
+  const corner = document.createElement('th');
+  corner.className = 'bucket-count-table__corner';
+  corner.setAttribute('scope', 'col');
+  headerRow.appendChild(corner);
+
+  tableData.bucketStarts.forEach((bucketStart) => {
+    const heading = document.createElement('th');
+    heading.className = 'bucket-count-table__column';
+    heading.setAttribute('scope', 'col');
+    heading.textContent = bucketLabelFormatter(bucketStart);
+    headerRow.appendChild(heading);
+  });
+
+  const totalHeading = document.createElement('th');
+  totalHeading.className = 'bucket-count-table__column bucket-count-table__column--total';
+  totalHeading.setAttribute('scope', 'col');
+  totalHeading.textContent = 'Total';
+  headerRow.appendChild(totalHeading);
+  thead.appendChild(headerRow);
+  table.append(thead);
+
+  const tbody = document.createElement('tbody');
+  tableData.rows.forEach((rowData) => {
+    const row = document.createElement('tr');
+
+    const rowLabel = document.createElement('th');
+    rowLabel.className = 'bucket-count-table__row-label';
+    rowLabel.setAttribute('scope', 'row');
+    rowLabel.textContent = rowData.label;
+    row.appendChild(rowLabel);
+
+    const rowTotal = sumBucketCounts(rowData.counts, tableData.bucketStarts);
+    const highlights = getTopBucketHighlights(rowData.counts, tableData.bucketStarts);
+
+    tableData.bucketStarts.forEach((bucketStart) => {
+      const cell = document.createElement('td');
+      cell.className = 'bucket-count-table__value';
+      const count = rowData.counts.get(bucketStart) ?? 0;
+      cell.textContent = formatBucketPercent(count, rowTotal);
+
+      const opacity = highlights.get(bucketStart);
+      if (opacity !== undefined) {
+        const bubble = document.createElement('span');
+        bubble.className = 'bucket-count-table__bubble';
+        bubble.style.backgroundColor = `rgba(210, 45, 45, ${opacity})`;
+        bubble.textContent = cell.textContent;
+        cell.textContent = '';
+        cell.appendChild(bubble);
+      }
+
+      row.appendChild(cell);
+    });
+
+    const totalCell = document.createElement('td');
+    totalCell.className = 'bucket-count-table__value bucket-count-table__value--total';
+    totalCell.textContent = String(rowTotal);
+    row.appendChild(totalCell);
+
+    tbody.appendChild(row);
+  });
+
+  table.appendChild(tbody);
+  return table;
+}
+
+function getFavouriteHighlights(entries) {
+  const ranked = [...entries]
+    .filter((entry) => entry.count > 0)
+    .sort((left, right) => right.count - left.count || left.pitchNumber - right.pitchNumber)
+    .slice(0, BUCKET_TOP_HIGHLIGHT_OPACITIES.length);
+
+  const highlights = new Map();
+  ranked.forEach((entry, rank) => {
+    highlights.set(entry.pitchNumber, BUCKET_TOP_HIGHLIGHT_OPACITIES[rank]);
+  });
+
+  return highlights;
+}
+
+function createFavouritesTable(favouritePitches, favouriteMemes) {
+  const sortedMemes = [...favouriteMemes].sort(
+    (left, right) => left.pitchNumber - right.pitchNumber,
+  );
+
+  const table = document.createElement('table');
+  table.className = 'bucket-favourites-table';
+  const tbody = document.createElement('tbody');
+
+  [
+    { label: 'Favourite Pitches', entries: favouritePitches },
+    { label: 'Favourite Memes', entries: sortedMemes },
+  ].forEach(({ label, entries }) => {
+    const row = document.createElement('tr');
+
+    const rowLabel = document.createElement('th');
+    rowLabel.className = 'bucket-favourites-table__row-label';
+    rowLabel.setAttribute('scope', 'row');
+    rowLabel.textContent = label;
+    row.appendChild(rowLabel);
+
+    if (!entries.length) {
+      const emptyCell = document.createElement('td');
+      emptyCell.className = 'bucket-favourites-table__value bucket-favourites-table__value--empty';
+      emptyCell.textContent = '—';
+      row.appendChild(emptyCell);
+    } else {
+      const highlights = getFavouriteHighlights(entries);
+      entries.forEach((entry) => {
+        const cell = document.createElement('td');
+        cell.className = 'bucket-favourites-table__value';
+
+        const content = document.createElement('span');
+        content.append(String(entry.pitchNumber));
+        const sup = document.createElement('sup');
+        sup.className = 'bucket-favourites-table__count';
+        sup.textContent = String(entry.count);
+        content.append(sup);
+
+        const opacity = highlights.get(entry.pitchNumber);
+        if (opacity !== undefined) {
+          const bubble = document.createElement('span');
+          bubble.className = 'bucket-count-table__bubble';
+          bubble.style.backgroundColor = `rgba(210, 45, 45, ${opacity})`;
+          bubble.appendChild(content);
+          cell.appendChild(bubble);
+        } else {
+          cell.appendChild(content);
+        }
+
+        row.appendChild(cell);
+      });
+    }
+
+    tbody.appendChild(row);
+  });
+
+  table.appendChild(tbody);
+  return table;
+}
+
+function renderBatterBucketPanel(pitcherAnalytics) {
+  if (!batterBucketPanelEl) {
+    return;
+  }
+
+  if (!isBatterMode() || !pitcherAnalytics?.allPitchRows?.length) {
+    batterBucketPanelEl.hidden = true;
+    batterBucketPanelEl.replaceChildren();
+    return;
+  }
+
+  const firstPitchMode = firstPitchModeActive;
+  const chronological = getSortedChronologicalPitchRows(pitcherAnalytics.allPitchRows);
+  const lastPitchNumber = chronological.length > 0
+    ? chronological[chronological.length - 1].pitchNumber
+    : null;
+
+  const anchorBucketStart = firstPitchMode
+    ? null
+    : getLatestPitchAnchorBucket(pitcherAnalytics.allPitchRows);
+  const pitchValueTable = buildPitchValueBucketTableRows(pitcherAnalytics.allPitchRows, {
+    anchorBucketStart,
+    filterByPreviousBucket: !firstPitchMode,
+  });
+  const deltaTable = firstPitchMode
+    ? null
+    : buildDeltaBucketTableRows(pitcherAnalytics.allPitchRows, {
+      anchorBucketStart,
+    });
+
+  batterBucketPanelEl.replaceChildren();
+
+  const card = createChartCard(
+    'Slayer Report',
+    firstPitchMode
+      ? 'First pitch of each game, bucketed by pitch number.'
+      : `Sequences whose previous pitch is in the latest-pitch bucket (${pitchValueTable?.anchorBucketLabel ?? '—'}).`,
+  );
+  card.classList.add('chart-card--table', 'chart-card--wide', 'batter-bucket-panel__card');
+
+  const topRow = document.createElement('div');
+  topRow.className = 'batter-bucket-panel__top';
+
+  const favouritesSection = document.createElement('div');
+  favouritesSection.className = 'batter-bucket-panel__section batter-bucket-panel__favourites';
+  favouritesSection.appendChild(
+    createFavouritesTable(
+      pitcherAnalytics.favouritePitches ?? [],
+      pitcherAnalytics.favouriteMemes ?? [],
+    ),
+  );
+  topRow.appendChild(favouritesSection);
+
+  if (!firstPitchMode && lastPitchNumber !== null) {
+    const lastPitchEl = document.createElement('div');
+    lastPitchEl.className = 'batter-bucket-panel__last-pitch';
+    const lastPitchLabel = document.createElement('span');
+    lastPitchLabel.className = 'batter-bucket-panel__last-pitch-label';
+    lastPitchLabel.textContent = 'Last Pitch';
+    const lastPitchValue = document.createElement('span');
+    lastPitchValue.className = 'batter-bucket-panel__last-pitch-value';
+    lastPitchValue.textContent = String(lastPitchNumber);
+    lastPitchEl.append(lastPitchLabel, lastPitchValue);
+    topRow.appendChild(lastPitchEl);
+  }
+
+  card.append(topRow);
+
+  const pitchSection = document.createElement('div');
+  pitchSection.className = 'batter-bucket-panel__section';
+  const lastPitchBucketLabel = pitchValueTable?.anchorBucketLabel ?? '—';
+  const pitchHeading = document.createElement('h3');
+  pitchHeading.className = 'batter-bucket-panel__section-title';
+  pitchHeading.textContent = firstPitchMode
+    ? 'First Pitches'
+    : `Pitches after ${lastPitchBucketLabel}`;
+  pitchSection.append(
+    pitchHeading,
+    createBucketCountTable(pitchValueTable, {
+      bucketLabelFormatter: (start) => formatPitchValueBucketLabel(start),
+      emptyMessage: firstPitchMode
+        ? 'No first pitches available.'
+        : 'No pitches with a previous pitch in the latest bucket.',
+    }),
+  );
+
+  card.append(pitchSection);
+
+  if (!firstPitchMode) {
+    const deltaSection = document.createElement('div');
+    deltaSection.className = 'batter-bucket-panel__section';
+    const deltaHeading = document.createElement('h3');
+    deltaHeading.className = 'batter-bucket-panel__section-title';
+    deltaHeading.textContent = `Δ after ${lastPitchBucketLabel}`;
+    deltaSection.append(
+      deltaHeading,
+      createBucketCountTable(deltaTable, {
+        bucketLabelFormatter: (start) => formatDeltaBucketLabel(start),
+        emptyMessage: 'No next-pitch deltas for the latest bucket filter.',
+      }),
+    );
+    card.append(deltaSection);
+  }
+
+  const expectedSection = document.createElement('div');
+  expectedSection.className = 'batter-bucket-panel__section';
+  expectedSection.append(
+    createExpectedBucketTable(buildExpectedBucketSummary(pitchValueTable, deltaTable)),
+  );
+
+  card.append(expectedSection);
+  batterBucketPanelEl.append(card);
+  batterBucketPanelEl.hidden = false;
+}
+
+function createTargetIcon(half = null) {
+  const wrapper = document.createElement('span');
+  wrapper.className = 'attack-zone-target';
+  if (half) {
+    wrapper.classList.add(`attack-zone-target--${half}`);
+  }
+  wrapper.setAttribute('aria-hidden', 'true');
+  wrapper.innerHTML = ''
+    + '<svg viewBox="0 0 32 32" focusable="false">'
+    + '<circle cx="16" cy="16" r="10" fill="none" stroke="currentColor" stroke-width="2" />'
+    + '<circle cx="16" cy="16" r="3.5" fill="none" stroke="currentColor" stroke-width="2" />'
+    + '<line x1="3" y1="16" x2="29" y2="16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />'
+    + '<line x1="16" y1="3" x2="16" y2="29" stroke="currentColor" stroke-width="2" stroke-linecap="round" />'
+    + '</svg>';
+  return wrapper;
+}
+
+function renderAttackZonePanel(pitcherAnalytics) {
+  if (!attackZonePanelEl) {
+    return;
+  }
+
+  const attackZone = pitcherAnalytics?.attackZone;
+  if (!isBatterMode() || !attackZone) {
+    attackZonePanelEl.hidden = true;
+    attackZonePanelEl.replaceChildren();
+    return;
+  }
+
+  attackZonePanelEl.replaceChildren();
+
+  const card = createChartCard(
+    'Attack Zone',
+    'Suggested swing target with the surrounding attack zone bounds.',
+  );
+  card.classList.add('chart-card--table', 'chart-card--wide', 'attack-zone-panel__card');
+
+  const display = document.createElement('div');
+  display.className = 'attack-zone-display';
+
+  const iconRow = document.createElement('div');
+  iconRow.className = 'attack-zone-icons-row';
+  iconRow.setAttribute('aria-hidden', 'true');
+
+  const iconSlots = [
+    { half: 'right', label: 'Attack zone start' },
+    { half: null, label: 'Recommended swing' },
+    { half: 'left', label: 'Attack zone end' },
+  ];
+
+  iconSlots.forEach(({ half, label }, index) => {
+    const slot = document.createElement('div');
+    slot.className = 'attack-zone-icons-row__slot';
+    slot.setAttribute('aria-label', label);
+    slot.appendChild(createTargetIcon(half));
+    iconRow.appendChild(slot);
+
+    if (index < iconSlots.length - 1) {
+      const connector = document.createElement('div');
+      connector.className = 'attack-zone-icons-row__connector';
+      iconRow.appendChild(connector);
+    }
+  });
+
+  const valueRow = document.createElement('div');
+  valueRow.className = 'attack-zone-values-row';
+  [attackZone.attackMin, attackZone.target, attackZone.attackMax].forEach((value, index) => {
+    const cell = document.createElement('div');
+    cell.className = 'attack-zone-table__value';
+    if (index === 1) {
+      cell.classList.add('attack-zone-table__value--target');
+    }
+    cell.textContent = String(value);
+    valueRow.appendChild(cell);
+  });
+
+  display.append(iconRow, valueRow);
+  card.append(display);
+  attackZonePanelEl.append(card);
+  attackZonePanelEl.hidden = false;
 }
 
 function getRecommendedSwingFromBucketCounts(counts) {
@@ -2023,16 +2701,11 @@ function renderMatchupStatsInline(pitcherName, batterName, pitcherAnalytics = nu
 
   if (pitcherName && pitcherStatsEl) {
     const pitcher = playerStatsByName.get(pitcherName);
-    const analytics = pitcherAnalytics ?? getPitcherAnalytics(pitcherName);
     appendStatCells(
       pitcherStatsEl,
       getPlayerStatBlock(pitcher, 'pitching'),
       PITCHING_STAT_FIELDS,
     );
-    if (analytics) {
-      appendFavouritePitchesLine(pitcherStatsEl, analytics.favouritePitches);
-      appendFavouriteMemesLine(pitcherStatsEl, analytics.favouriteMemes);
-    }
   }
 
   if (batterName && batterStatsEl) {
@@ -4099,6 +4772,8 @@ function updateDashboard() {
     pitcherStatsEl?.replaceChildren();
     batterStatsEl?.replaceChildren();
     chartGrid.replaceChildren();
+    renderBatterBucketPanel(null);
+    renderAttackZonePanel(null);
     return;
   }
 
@@ -4111,6 +4786,8 @@ function updateDashboard() {
   const pitcherAnalytics = getPitcherAnalytics(selectedPitcher);
   rowCountEl.textContent = `${filteredRows.length.toLocaleString()} plays`;
   renderMatchupStatsInline(selectedPitcher, selectedBatter, pitcherAnalytics);
+  renderBatterBucketPanel(pitcherAnalytics);
+  renderAttackZonePanel(pitcherAnalytics);
   renderDashboard(pitcherAnalytics, selectedPitcher, selectedBatter);
 }
 
