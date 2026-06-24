@@ -267,6 +267,17 @@ body {
   cursor: pointer;
 }
 
+.game-mode-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.game-mode-controls .first-pitch-mode-control:last-child input {
+  accent-color: #35bfa5;
+}
+
 .hero__logo {
   width: clamp(72px, 10vw, 108px);
   height: auto;

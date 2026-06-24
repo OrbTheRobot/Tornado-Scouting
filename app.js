@@ -8,6 +8,7 @@ import {
 } from './config.js';
 import { buildRangeTable } from './rangeEngine.js';
 import {
+  decodeRunnerMask,
   formatTargetGameLabel,
   getRosterNames,
   inferSituationFromPlays,
@@ -26,6 +27,9 @@ const RANGE_BAND_FILL_OPACITY = 0.25;
 const RANGE_MARKER_LINE_WIDTH = 3;
 const RANGE_BOUNDARY_TICK_WIDTH = 3;
 const HYPOTHETICAL_SWING_LINE_WIDTH = 3.5;
+const PITCH_SWING_LINE_WIDTH = 2;
+const PITCH_SWING_LINE_OPACITY = 0.55;
+const PITCH_SWING_LINE_COLOR = 'rgba(176, 156, 196, 0.55)';
 const MEME_PITCH_NUMBERS = [
   1, 69, 111, 222, 333, 404, 420, 444, 500, 501, 555, 569, 666, 669, 696, 711, 777, 888, 911, 999, 1000,
 ];
@@ -72,8 +76,14 @@ const PROXIMITY_DELTA_BAND_MID_RADIUS = (
 ) / 2;
 const DELTA_WHISKER_LINE_WIDTH = 1.5;
 const PROXIMITY_DELTA_BAND_COLOR = '#9a93a8';
+const SITUATION_DELTA_BAND_INNER_RADIUS = PROXIMITY_DELTA_BAND_OUTER_RADIUS + DELTA_BAND_GAP;
+const SITUATION_DELTA_BAND_OUTER_RADIUS = SITUATION_DELTA_BAND_INNER_RADIUS + DELTA_BAND_THICKNESS;
+const SITUATION_DELTA_BAND_MID_RADIUS = (
+  SITUATION_DELTA_BAND_INNER_RADIUS + SITUATION_DELTA_BAND_OUTER_RADIUS
+) / 2;
+const SITUATION_DELTA_BAND_COLOR = '#e0b341';
 const RANGE_BAND_GAP = 0.012;
-const RANGE_MARKER_INNER_RADIUS = PROXIMITY_DELTA_BAND_OUTER_RADIUS + RANGE_BAND_GAP;
+const RANGE_MARKER_INNER_RADIUS = SITUATION_DELTA_BAND_OUTER_RADIUS + RANGE_BAND_GAP;
 const RANGE_MARKER_OUTER_RADIUS = RANGE_MARKER_INNER_RADIUS + DELTA_BAND_THICKNESS;
 const SITUATION_MINI_RADIUS = RANGE_MARKER_OUTER_RADIUS + 0.058;
 const DELTA_BAND_RADIUS_OFFSET_PX = 15;
@@ -146,6 +156,7 @@ const gameScoreEl = document.getElementById('game-score');
 const gameScoreTeamsEl = document.getElementById('game-score-teams');
 const situationGraphicEl = document.getElementById('situation-graphic');
 const firstPitchModeCheckbox = document.getElementById('first-pitch-mode');
+const pitcherModeCheckbox = document.getElementById('pitcher-mode');
 const firstPitchModeBannerEl = document.getElementById('first-pitch-mode-banner');
 const pitcherStatsEl = document.getElementById('pitcher-stats');
 const batterStatsEl = document.getElementById('batter-stats');
@@ -180,6 +191,11 @@ let spiralRedraw = null;
 let lastSelectedPitcher = '';
 let inferredSituation = null;
 let firstPitchModeActive = false;
+let pitcherModeActive = false;
+
+function isPitcherMode() {
+  return pitcherModeActive;
+}
 
 function isLiveScoutingMode() {
   return true;
@@ -338,9 +354,13 @@ function populatePitcherDropdown(pitchers, pitcherRows = []) {
   populateSelect(pitcherSelect, pitchers, {
     previousValue: pitcherSelect.value,
     defaultValue: isLiveScoutingMode()
-      ? getDefaultLivePitcher(pitchers)
+      ? getDefaultPitcherSelection(pitchers)
       : '',
   });
+}
+
+function getDefaultPitcherSelection(pitchers) {
+  return getDefaultLivePitcher(pitchers);
 }
 
 function getDefaultLivePitcher(pitchers) {
@@ -419,6 +439,46 @@ function getLiveScoutingBatters() {
   });
 }
 
+function getPitcherModePitchers() {
+  if (!liveTargetGame?.opponentTeam) {
+    return [];
+  }
+
+  const sunPitchers = getRosterNames(playerStatsByName, {
+    team: SHEET_CONFIG.scoutTeamAbv,
+    role: 'pitcher',
+  });
+
+  if (sunPitchers.length > 0) {
+    return sunPitchers;
+  }
+
+  return getUniquePitchers(allRows).filter((pitcher) => {
+    const player = playerStatsByName.get(pitcher);
+    return player?.team === SHEET_CONFIG.scoutTeamAbv && player?.primary === 'P';
+  });
+}
+
+function getPitcherModeBatters() {
+  if (!liveTargetGame?.opponentTeam) {
+    return [];
+  }
+
+  const opponentBatters = getRosterNames(playerStatsByName, {
+    team: liveTargetGame.opponentTeam,
+    role: 'batter',
+  });
+
+  if (opponentBatters.length > 0) {
+    return opponentBatters;
+  }
+
+  return getAllBatters().filter((batter) => {
+    const player = playerStatsByName.get(batter);
+    return player?.team === liveTargetGame.opponentTeam && player?.primary !== 'P';
+  });
+}
+
 function refreshLiveTargetGame() {
   liveTargetGame = resolveSunTargetGame({
     sessions: sessionDates,
@@ -482,11 +542,15 @@ function updateFirstPitchModeBanner() {
 }
 
 function getAvailablePitchers() {
-  return getLiveScoutingPitchers();
+  return isPitcherMode()
+    ? getPitcherModePitchers()
+    : getLiveScoutingPitchers();
 }
 
 function getAvailableBatters() {
-  return getLiveScoutingBatters();
+  return isPitcherMode()
+    ? getPitcherModeBatters()
+    : getLiveScoutingBatters();
 }
 
 function getAllBatters() {
@@ -515,9 +579,13 @@ function populateBatterDropdown(batters, pitcherRows) {
   populateSelect(batterSelect, batters, {
     previousValue: batterSelect.value,
     defaultValue: isLiveScoutingMode()
-      ? getDefaultLiveBatter(batters, pitcherRows)
+      ? getDefaultBatterSelection(batters, pitcherRows)
       : getMostRecentBatter(pitcherRows),
   });
+}
+
+function getDefaultBatterSelection(batters, pitcherRows) {
+  return getDefaultLiveBatter(batters, pitcherRows);
 }
 
 function filterRowsByPitcher(rows, pitcher) {
@@ -736,7 +804,12 @@ function buildSpiralRangeChartRow(label, overlay) {
   };
 }
 
-function buildSpiralRangeOverlaySummary(forwardDeltaOverlay, proximityDeltaOverlay, options = {}) {
+function buildSpiralRangeOverlaySummary(
+  forwardDeltaOverlay,
+  proximityDeltaOverlay,
+  situationDeltaOverlay,
+  options = {},
+) {
   const { firstPitchMode = false } = options;
   const rows = [];
 
@@ -752,6 +825,10 @@ function buildSpiralRangeOverlaySummary(forwardDeltaOverlay, proximityDeltaOverl
     if (proximityDeltaOverlay) {
       rows.push(buildSpiralRangeChartRow('By Value', proximityDeltaOverlay));
     }
+  }
+
+  if (situationDeltaOverlay) {
+    rows.push(buildSpiralRangeChartRow('By Situation', situationDeltaOverlay));
   }
 
   if (rows.length === 0) {
@@ -1186,7 +1263,12 @@ function getPitcherRowsForMatsumoto(pitcherName) {
 }
 
 function getPitcherAnalyticsCacheKey(pitcherName) {
-  return `${pitcherName}|${firstPitchModeActive ? 'first-pitch' : 'all'}`;
+  const modeFlags = [
+    firstPitchModeActive ? 'first-pitch' : 'all',
+    isPitcherMode() ? 'pitcher-mode' : 'hitter-mode',
+  ].filter(Boolean).join('|');
+
+  return `${pitcherName}|${modeFlags}`;
 }
 
 function extractFirstPitchRows(rows) {
@@ -1317,7 +1399,9 @@ function getPitcherAnalytics(pitcherName) {
         },
       ),
     },
-    attackZone: getAttackZoneFromPitchRows(allPitchRows),
+    attackZone: isPitcherMode()
+      ? null
+      : getAttackZoneFromPitchRows(allPitchRows),
     favouritePitches: getFavouritePitchesFromCounts(pitchCounts),
     favouriteMemes: getFavouriteMemesFromCounts(pitchCounts),
     overlays: null,
@@ -1335,11 +1419,13 @@ function getSpiralOverlays(pitcherName, pitcherRows, allPitchRows) {
       analytics.overlays = {
         forward: null,
         proximity: buildSpiralFirstPitchOverlay(pitcherRows),
+        situation: buildSpiralSituationOverlay(pitcherRows, allPitchRows),
       };
     } else {
       analytics.overlays = {
         forward: buildSpiralForwardDeltaOverlay(pitcherRows, allPitchRows),
         proximity: buildSpiralProximityDeltaOverlay(pitcherRows, allPitchRows),
+        situation: buildSpiralSituationOverlay(pitcherRows, allPitchRows),
       };
     }
   }
@@ -2069,11 +2155,20 @@ function getProximityDeltaBandGeometry() {
   };
 }
 
+function getSituationDeltaBandGeometry() {
+  return {
+    innerRadiusFraction: SITUATION_DELTA_BAND_INNER_RADIUS,
+    outerRadiusFraction: SITUATION_DELTA_BAND_OUTER_RADIUS,
+    midRadiusFraction: SITUATION_DELTA_BAND_MID_RADIUS,
+  };
+}
+
 function collectForwardPitchDeltas(chronologicalRows, options = {}) {
   const {
     targetCategory = null,
     anchorPitch = null,
     proximityTolerance = null,
+    situationMatch = null,
   } = options;
   const deltas = [];
 
@@ -2083,6 +2178,13 @@ function collectForwardPitchDeltas(chronologicalRows, options = {}) {
     if (
       targetCategory !== null
       && normalizeResultCategory(current.row.Result) !== targetCategory
+    ) {
+      continue;
+    }
+
+    if (
+      situationMatch !== null
+      && !rowMatchesSituation(current.row, situationMatch)
     ) {
       continue;
     }
@@ -2391,6 +2493,9 @@ function buildSpiralDeltaOverlay(pitcherRows, spiralPitchRows, options = {}) {
     filterByCategory = true,
     scopeLabel = 'category',
     bandGeometry = getPrimaryDeltaBandGeometry(),
+    situationMatch = null,
+    colorOverride = null,
+    categoryLabelOverride = null,
   } = options;
   const spiralChronological = [...spiralPitchRows].sort((a, b) => a.playOrder - b.playOrder);
 
@@ -2426,6 +2531,7 @@ function buildSpiralDeltaOverlay(pitcherRows, spiralPitchRows, options = {}) {
     targetCategory: filterByCategory ? category : null,
     anchorPitch: proximityTolerance === null ? null : anchorPitch,
     proximityTolerance,
+    situationMatch,
   });
 
   if (forwardDeltas.length === 0) {
@@ -2450,15 +2556,16 @@ function buildSpiralDeltaOverlay(pitcherRows, spiralPitchRows, options = {}) {
     maxPitch: pitchAtDelta(stats.max),
     latestResult,
     category,
-    categoryLabel,
-    color: filterByCategory
+    categoryLabel: categoryLabelOverride ?? categoryLabel,
+    color: colorOverride ?? (filterByCategory
       ? (RESULT_CATEGORY_COLORS[category] ?? RESULT_CATEGORY_COLORS.Other)
-      : PROXIMITY_DELTA_BAND_COLOR,
+      : PROXIMITY_DELTA_BAND_COLOR),
     sampleCount: forwardDeltas.length,
     seasonCount: getMatsumotoSeasons().length,
     scopeLabel,
     proximityTolerance,
     bandGeometry,
+    situation: situationMatch,
   };
 }
 
@@ -2523,6 +2630,47 @@ function buildSpiralFirstPitchOverlay(pitcherRows) {
   };
 }
 
+function normalizeSituationOuts(value) {
+  const outs = Number.parseInt(String(value ?? '').trim(), 10);
+  if (!Number.isFinite(outs)) {
+    return 0;
+  }
+
+  if (outs >= 3) {
+    return 0;
+  }
+
+  return Math.min(2, Math.max(0, outs));
+}
+
+function rowMatchesSituation(row, situation) {
+  const runners = decodeRunnerMask(row.BRC);
+  return runners.onFirst === situation.onFirst
+    && runners.onSecond === situation.onSecond
+    && runners.onThird === situation.onThird
+    && normalizeSituationOuts(row.Outs) === situation.outs;
+}
+
+function formatSituation(situation) {
+  const bases = [];
+  if (situation.onFirst) bases.push('1st');
+  if (situation.onSecond) bases.push('2nd');
+  if (situation.onThird) bases.push('3rd');
+  const runnerLabel = bases.length > 0 ? bases.join('/') : 'bases empty';
+  return `${runnerLabel} · ${situation.outs} out${situation.outs === 1 ? '' : 's'}`;
+}
+
+function buildSpiralSituationOverlay(pitcherRows, spiralPitchRows) {
+  return buildSpiralDeltaOverlay(pitcherRows, spiralPitchRows, {
+    filterByCategory: false,
+    scopeLabel: 'situation',
+    situationMatch: getSituationState(),
+    colorOverride: SITUATION_DELTA_BAND_COLOR,
+    categoryLabelOverride: 'By Situation',
+    bandGeometry: getSituationDeltaBandGeometry(),
+  });
+}
+
 function formatForwardDeltaCaption(overlay) {
   const { stats, categoryLabel, seasonCount, sampleCount, scopeLabel, proximityTolerance } = overlay;
   const direction = stats.median === 0
@@ -2537,6 +2685,10 @@ function formatForwardDeltaCaption(overlay) {
 
   if (scopeLabel === 'first-pitch') {
     return `First pitch distribution · gap-centered anchor ${overlay.anchorPitch} · median ${direction} · Q1–Q3 band · min–max at widest gap · last ${seasonCount} season${seasonCount === 1 ? '' : 's'} · n=${sampleCount.toLocaleString()}`;
+  }
+
+  if (scopeLabel === 'situation') {
+    return `Next-pitch Δ in situation (${formatSituation(overlay.situation)}) · median ${direction} · Q1–Q3 band · min–max whiskers · last ${seasonCount} season${seasonCount === 1 ? '' : 's'} · n=${sampleCount.toLocaleString()}`;
   }
 
   return `Next-pitch Δ for ${categoryLabel} · median ${direction} · Q1–Q3 band · min–max whiskers · last ${seasonCount} season${seasonCount === 1 ? '' : 's'} · n=${sampleCount.toLocaleString()}`;
@@ -2684,6 +2836,7 @@ function buildSpiralPoints(pitchRows, center, maxRadius) {
     return {
       ...point,
       pitchNumber: entry.pitchNumber,
+      swingNumber: parseSwingNumber(entry.row['Swing #']),
       result,
       category,
       color: RESULT_CATEGORY_COLORS[category],
@@ -3139,6 +3292,29 @@ function drawHypotheticalSwing(context, center, maxRadius, swingNumber) {
   context.restore();
 }
 
+function drawPitchSwingLines(context, center, maxRadius, points) {
+  context.save();
+  context.lineCap = 'round';
+
+  points.forEach((point) => {
+    if (point.swingNumber === null) {
+      return;
+    }
+
+    const swingAngle = pitchNumberToAngle(point.swingNumber);
+    const swingPoint = polarToCanvas(swingAngle, point.radius, center, maxRadius);
+
+    context.strokeStyle = PITCH_SWING_LINE_COLOR;
+    context.lineWidth = PITCH_SWING_LINE_WIDTH;
+    context.beginPath();
+    context.moveTo(center, center);
+    context.lineTo(swingPoint.x, swingPoint.y);
+    context.stroke();
+  });
+
+  context.restore();
+}
+
 function mapSituationViewPoint(centerX, centerY, pixelSize, x, y) {
   const scale = pixelSize / SITUATION_VIEWBOX.width;
   return {
@@ -3329,9 +3505,13 @@ function drawPitchSpiralScene(
   pitchDensityProfiles = null,
   options = {},
 ) {
-  const { skipConnectors = false } = options;
+  const { skipConnectors = false, pitcherMode = false, situationDeltaOverlay = null } = options;
   drawSpiralGuide(context, center, maxRadius);
   drawPitchDensityLines(context, center, maxRadius, pitchDensityProfiles);
+
+  if (pitcherMode) {
+    drawPitchSwingLines(context, center, maxRadius, points);
+  }
 
   context.lineWidth = 2;
   context.lineCap = 'round';
@@ -3365,6 +3545,10 @@ function drawPitchSpiralScene(
 
   if (proximityDeltaOverlay) {
     drawSpiralDeltaOverlay(context, center, maxRadius, proximityDeltaOverlay);
+  }
+
+  if (situationDeltaOverlay) {
+    drawSpiralDeltaOverlay(context, center, maxRadius, situationDeltaOverlay);
   }
 
   if (rangeRegions.length > 0 && attackZone) {
@@ -3415,6 +3599,21 @@ function appendAttackZoneLegendItem(parent) {
   parent.appendChild(item);
 }
 
+function appendPitchSwingLegendItem(parent) {
+  const item = document.createElement('span');
+  item.className = 'result-legend-item';
+
+  const swatch = document.createElement('span');
+  swatch.className = 'connector-line-swatch';
+  swatch.style.borderTopColor = 'rgba(176, 156, 196, 0.85)';
+
+  const text = document.createElement('span');
+  text.textContent = 'Swing line';
+
+  item.append(swatch, text);
+  parent.appendChild(item);
+}
+
 function appendPitchDensityLegendItem(parent, label, lineColor) {
   const item = document.createElement('span');
   item.className = 'result-legend-item';
@@ -3437,7 +3636,12 @@ function renderSpiralLegend(
   attackZone = null,
   options = {},
 ) {
-  const { firstPitchMode = false, pitchDensityProfiles = null } = options;
+  const {
+    firstPitchMode = false,
+    pitcherMode = false,
+    pitchDensityProfiles = null,
+    situationDeltaOverlay = null,
+  } = options;
   const legend = document.createElement('div');
   legend.className = 'result-legend result-legend--top';
 
@@ -3480,7 +3684,7 @@ function renderSpiralLegend(
 
   legend.appendChild(resultsRow);
 
-  if (pitchDensityProfiles?.allTime || pitchDensityProfiles?.recent || forwardDeltaOverlay || proximityDeltaOverlay || attackZone) {
+  if (pitchDensityProfiles?.allTime || pitchDensityProfiles?.recent || forwardDeltaOverlay || proximityDeltaOverlay || situationDeltaOverlay || attackZone || pitcherMode) {
     const overlayRow = document.createElement('div');
     overlayRow.className = 'result-legend-row';
 
@@ -3504,6 +3708,10 @@ function renderSpiralLegend(
       appendAttackZoneLegendItem(overlayRow);
     }
 
+    if (pitcherMode) {
+      appendPitchSwingLegendItem(overlayRow);
+    }
+
     if (firstPitchMode) {
       appendDeltaOverlayLegendItem(
         overlayRow,
@@ -3522,6 +3730,12 @@ function renderSpiralLegend(
         'Next Pitch Range by Number',
       );
     }
+
+    appendDeltaOverlayLegendItem(
+      overlayRow,
+      situationDeltaOverlay,
+      'Pitches by Situation',
+    );
 
     legend.appendChild(overlayRow);
   }
@@ -3568,9 +3782,12 @@ function attachSpiralZoom(canvas, drawScene) {
 }
 
 function renderPitchSpiral(pitcherAnalytics, pitcherName, batterName) {
+  const pitcherMode = isPitcherMode();
   const card = createChartCard(
     'Tornado Graph',
-    'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Shows the last 25 pitches; stats and overlays use all available seasons. Smoothed pitch-density curves trace each 50-pitch bucket: purple for all-time usage, teal for the last 100 pitches. Farther from center means more pitches in that bucket. Scroll to zoom.',
+    pitcherMode
+      ? 'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Pitcher mode shows SUN pitching: last 25 pitches with swing lines from center to each swing # at the same radius as its pitch (recency). Attack zone and recommended swing are hidden. Scroll to zoom.'
+      : 'Pitch number sets angle from top (pitch # × 360 ÷ 1000). Shows the last 25 pitches; stats and overlays use all available seasons. Smoothed pitch-density curves trace each 50-pitch bucket: purple for all-time usage, teal for the last 100 pitches. Farther from center means more pitches in that bucket. Scroll to zoom.',
   );
   card.classList.add('chart-card--wide', 'chart-card--spiral');
 
@@ -3595,31 +3812,43 @@ function renderPitchSpiral(pitcherAnalytics, pitcherName, batterName) {
   const center = SPIRAL_CANVAS_SIZE / 2;
   const maxRadius = SPIRAL_CANVAS_SIZE * SPIRAL_RADIUS_SCALE;
   const points = buildSpiralPoints(visiblePitchRows, center, maxRadius);
-  const { forward: forwardDeltaOverlay, proximity: proximityDeltaOverlay } = getSpiralOverlays(
+  const {
+    forward: forwardDeltaOverlay,
+    proximity: proximityDeltaOverlay,
+    situation: situationDeltaOverlay,
+  } = getSpiralOverlays(
     pitcherName,
     pitcherRows,
     allPitchRows,
   );
   const rangeTable = buildMatchupRangeTable(pitcherName, batterName);
   const baseSituation = getSituationState();
-  const rangeRegions = attackZone && rangeTable
+  const rangeRegions = !pitcherMode && attackZone && rangeTable
     ? buildRangeSpiralMarkers(rangeTable.rows, attackZone.target, baseSituation)
     : [];
   const rangeOverlaySummary = buildSpiralRangeOverlaySummary(
     forwardDeltaOverlay,
     proximityDeltaOverlay,
+    situationDeltaOverlay,
     { firstPitchMode: firstPitchModeActive },
   );
-  const swingSummary = buildSpiralSwingSummary(
-    attackZone,
-    rangeTable?.rows ?? null,
-  );
+  const swingSummary = pitcherMode
+    ? null
+    : buildSpiralSwingSummary(
+      attackZone,
+      rangeTable?.rows ?? null,
+    );
   const legend = renderSpiralLegend(
     getActiveResultCategories(points),
     forwardDeltaOverlay,
     proximityDeltaOverlay,
     attackZone,
-    { firstPitchMode: firstPitchModeActive, pitchDensityProfiles },
+    {
+      firstPitchMode: firstPitchModeActive,
+      pitcherMode,
+      pitchDensityProfiles,
+      situationDeltaOverlay,
+    },
   );
 
   const stage = document.createElement('div');
@@ -3645,7 +3874,9 @@ function renderPitchSpiral(pitcherAnalytics, pitcherName, batterName) {
   );
 
   canvasWrap.appendChild(canvas);
-  canvasWrap.appendChild(createSpiralSwingOverlay(swingSummary));
+  if (!pitcherMode) {
+    canvasWrap.appendChild(createSpiralSwingOverlay(swingSummary));
+  }
   canvasWrap.appendChild(createSpiralRangeOverlay(rangeOverlaySummary));
   if (firstPitchModeActive) {
     canvasWrap.appendChild(createSpiralFirstPitchModeOverlay());
@@ -3663,7 +3894,11 @@ function renderPitchSpiral(pitcherAnalytics, pitcherName, batterName) {
       attackZone,
       rangeRegions,
       pitchDensityProfiles,
-      { skipConnectors: firstPitchModeActive },
+      {
+        skipConnectors: firstPitchModeActive,
+        pitcherMode,
+        situationDeltaOverlay,
+      },
     );
   });
   spiralRedraw = spiralController.redraw;
@@ -3682,12 +3917,20 @@ function renderPitchSpiral(pitcherAnalytics, pitcherName, batterName) {
     metaParts.push('first pitch mode · one pitch per game');
   }
 
+  if (pitcherMode) {
+    metaParts.push('pitcher mode · swing lines share pitch radius');
+  }
+
   if (forwardDeltaOverlay) {
     metaParts.push(formatForwardDeltaCaption(forwardDeltaOverlay));
   }
 
   if (proximityDeltaOverlay) {
     metaParts.push(formatForwardDeltaCaption(proximityDeltaOverlay));
+  }
+
+  if (situationDeltaOverlay) {
+    metaParts.push(formatForwardDeltaCaption(situationDeltaOverlay));
   }
 
   if (rangeRegions.length > 0) {
@@ -3807,12 +4050,13 @@ function updateDashboard() {
     return;
   }
 
-  const filteredRows = getPitcherDisplayRows(selectedPitcher);
-  const pitcherAnalytics = getPitcherAnalytics(selectedPitcher);
   const batters = getAvailableBatters();
-  populateBatterDropdown(batters, filteredRows);
+  const preliminaryRows = getPitcherRowsForMatsumoto(selectedPitcher);
+  populateBatterDropdown(batters, filterRowsForPitchScope(preliminaryRows));
 
   const selectedBatter = batterSelect.value;
+  const filteredRows = getPitcherDisplayRows(selectedPitcher);
+  const pitcherAnalytics = getPitcherAnalytics(selectedPitcher);
   rowCountEl.textContent = `${filteredRows.length.toLocaleString()} plays`;
   renderMatchupStatsInline(selectedPitcher, selectedBatter, pitcherAnalytics);
   renderDashboard(pitcherAnalytics, selectedPitcher, selectedBatter);
@@ -3884,7 +4128,14 @@ pitcherSelect.addEventListener('change', updateDashboard);
 batterSelect.addEventListener('change', updateDashboard);
 firstPitchModeCheckbox?.addEventListener('change', () => {
   firstPitchModeActive = firstPitchModeCheckbox.checked;
+  pitcherAnalyticsByName.clear();
   updateFirstPitchModeBanner();
+  updateDashboard();
+});
+pitcherModeCheckbox?.addEventListener('change', () => {
+  pitcherModeActive = pitcherModeCheckbox.checked;
+  pitcherAnalyticsByName.clear();
+  lastSelectedPitcher = '';
   updateDashboard();
 });
 
