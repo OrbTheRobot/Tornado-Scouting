@@ -2,7 +2,7 @@
 
 Static charting dashboard hosted on GitHub Pages, backed by a public Google Sheet.
 
-Repository: [OrbTheRobot/Tornado-Scouting](https://github.com/OrbTheRobot/Tornado-Scouting)
+Repository: [OrbTheRobot/Slayer-Souting-Report](https://github.com/OrbTheRobot/Slayer-Souting-Report)
 
 ## Data source
 
@@ -26,7 +26,7 @@ Open `http://localhost:8080`.
 2. In the repo, go to **Settings → Pages**.
 3. Under **Build and deployment**, set **Source** to **Deploy from a branch**.
 4. Choose branch `main` and folder `/ (root)`.
-5. Save. The site will publish at `https://orbtherobot.github.io/Tornado-Scouting/`.
+5. Save. The site will publish at `https://orbtherobot.github.io/Slayer-Souting-Report/`.
 
 ## Cursor workspace
 
