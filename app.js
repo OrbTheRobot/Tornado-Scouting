@@ -2350,7 +2350,7 @@ function getSpiralOverlays(pitcherName, pitcherRows, allPitchRows) {
       analytics.overlays = {
         forward: null,
         proximity: buildSpiralFirstPitchOverlay(pitcherRows),
-        situation: buildSpiralSituationOverlay(pitcherRows, allPitchRows),
+        situation: null,
       };
     } else {
       analytics.overlays = {
