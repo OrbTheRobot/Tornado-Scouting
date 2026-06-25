@@ -61,6 +61,11 @@ const PITCH_DENSITY_LINE_COLOR = 'rgba(156, 136, 186, 0.82)';
 const PITCH_DENSITY_RECENT_PITCH_COUNT = BUCKET_USAGE_RECENT_PITCH_COUNT;
 const PITCH_DENSITY_RECENT_LINE_COLOR = 'rgba(53, 191, 165, 0.82)';
 const PITCH_DENSITY_RECENT_RADIUS_LANE_OFFSET = -0.014;
+const SWING_TENDENCY_RECENT_PITCH_COUNT = 100;
+const SWING_TENDENCY_VISIBLE_PITCH_COUNT = SPIRAL_VISIBLE_PITCH_COUNT;
+const SWING_TENDENCY_ALLTIME_COLOR = PITCH_DENSITY_LINE_COLOR;
+const SWING_TENDENCY_RECENT_COLOR = PITCH_DENSITY_RECENT_LINE_COLOR;
+const SWING_TENDENCY_VISIBLE_COLOR = 'rgba(255, 209, 71, 0.85)';
 const PITCH_VALUE_BUCKET_SIZE = 100;
 const DELTA_BUCKET_SIZE = 50;
 const BATTER_BUCKET_RECENT_PITCH_COUNT = 100;
@@ -1325,25 +1330,12 @@ function createTargetIcon(half = null) {
   return wrapper;
 }
 
-function renderAttackZonePanel(pitcherAnalytics) {
-  if (!attackZonePanelEl) {
-    return;
-  }
-
-  const attackZone = pitcherAnalytics?.attackZone;
-  if (!isBatterMode() || !attackZone) {
-    attackZonePanelEl.hidden = true;
-    attackZonePanelEl.replaceChildren();
-    return;
-  }
-
-  attackZonePanelEl.replaceChildren();
-
+function createAttackZoneCard(attackZone) {
   const card = createChartCard(
     'Attack Zone',
     'Suggested swing target with the surrounding attack zone bounds.',
   );
-  card.classList.add('chart-card--table', 'chart-card--wide', 'attack-zone-panel__card');
+  card.classList.add('chart-card--table', 'attack-zone-panel__card');
 
   const display = document.createElement('div');
   display.className = 'attack-zone-display';
@@ -1386,7 +1378,179 @@ function renderAttackZonePanel(pitcherAnalytics) {
 
   display.append(iconRow, valueRow);
   card.append(display);
-  attackZonePanelEl.append(card);
+  return card;
+}
+
+function buildSwingTendencyGaugeData(pitchRows) {
+  const chronological = getSortedChronologicalPitchRows(pitchRows);
+  const samples = [];
+
+  for (let index = 1; index < chronological.length; index += 1) {
+    const previousSwing = parseSwingNumber(chronological[index - 1].row['Swing #']);
+    if (previousSwing === null) {
+      continue;
+    }
+
+    const travel = getPitchTravelDelta(previousSwing, chronological[index].pitchNumber);
+    samples.push((travel - 250) / 250);
+  }
+
+  if (samples.length === 0) {
+    return null;
+  }
+
+  const average = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
+  const recentSamples = samples.slice(-SWING_TENDENCY_RECENT_PITCH_COUNT);
+  const visibleSamples = samples.slice(-SWING_TENDENCY_VISIBLE_PITCH_COUNT);
+
+  return {
+    allTime: average(samples),
+    recent: average(recentSamples),
+    visible: average(visibleSamples),
+    allTimeCount: samples.length,
+    recentCount: recentSamples.length,
+    visibleCount: visibleSamples.length,
+  };
+}
+
+function createChaseTendencyGauge(allTimeValue, recentValue, visibleValue) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'swing-gauge';
+
+  const cx = 120;
+  const cy = 124;
+  const arcRadius = 100;
+  const needleRadius = 92;
+
+  const toPoint = (value, radius) => {
+    const clamped = Math.max(-1, Math.min(1, value));
+    const fraction = (clamped + 1) / 2;
+    const theta = Math.PI * (1 - fraction);
+    return {
+      x: cx + radius * Math.cos(theta),
+      y: cy - radius * Math.sin(theta),
+    };
+  };
+
+  const trackPoints = [];
+  const steps = 60;
+  for (let index = 0; index <= steps; index += 1) {
+    const value = -1 + (2 * index) / steps;
+    const point = toPoint(value, arcRadius);
+    trackPoints.push(`${point.x.toFixed(2)},${point.y.toFixed(2)}`);
+  }
+  const trackPath = `M ${trackPoints.join(' L ')}`;
+
+  const ticks = [-1, 0, 1].map((value) => {
+    const outer = toPoint(value, arcRadius + 3);
+    const inner = toPoint(value, arcRadius - 11);
+    return `<line x1="${inner.x.toFixed(2)}" y1="${inner.y.toFixed(2)}" `
+      + `x2="${outer.x.toFixed(2)}" y2="${outer.y.toFixed(2)}" />`;
+  }).join('');
+
+  const hubRadius = 6;
+  const needle = (value, color, radius, baseWidth) => {
+    const tip = toPoint(value, radius);
+    const dx = tip.x - cx;
+    const dy = tip.y - cy;
+    const length = Math.hypot(dx, dy) || 1;
+    const halfBase = Math.min(baseWidth, hubRadius * 2) / 2;
+    const perpX = (-dy / length) * halfBase;
+    const perpY = (dx / length) * halfBase;
+    const baseLeft = `${(cx + perpX).toFixed(2)},${(cy + perpY).toFixed(2)}`;
+    const baseRight = `${(cx - perpX).toFixed(2)},${(cy - perpY).toFixed(2)}`;
+    const tipPoint = `${tip.x.toFixed(2)},${tip.y.toFixed(2)}`;
+    return `<polygon class="swing-gauge__needle" points="${baseLeft} ${tipPoint} ${baseRight}" `
+      + `fill="${color}" />`;
+  };
+
+  wrapper.innerHTML = ''
+    + `<svg viewBox="0 0 240 152" class="swing-gauge__svg" role="img" `
+    + `aria-label="Chase tendency gauge from -1 (chases swings) to 1 (flees swings)">`
+    + `<path class="swing-gauge__track" d="${trackPath}" fill="none" />`
+    + `<g class="swing-gauge__ticks">${ticks}</g>`
+    + needle(allTimeValue, SWING_TENDENCY_ALLTIME_COLOR, needleRadius, hubRadius * 2)
+    + needle(recentValue, SWING_TENDENCY_RECENT_COLOR, needleRadius * 0.75, hubRadius * 2)
+    + needle(visibleValue, SWING_TENDENCY_VISIBLE_COLOR, needleRadius * 0.5, hubRadius * 2)
+    + `<circle class="swing-gauge__hub" cx="${cx}" cy="${cy}" r="${hubRadius}" />`
+    + '</svg>'
+    + '<div class="swing-gauge__labels">'
+    + '<span class="swing-gauge__label">Chases Swings</span>'
+    + '<span class="swing-gauge__label">Flees Swings</span>'
+    + '</div>'
+    + '<div class="swing-gauge__legend">'
+    + `<span class="swing-gauge__legend-item">`
+    + `<span class="swing-gauge__dot" style="background:${SWING_TENDENCY_ALLTIME_COLOR}"></span>`
+    + `All time</span>`
+    + `<span class="swing-gauge__legend-item">`
+    + `<span class="swing-gauge__dot" style="background:${SWING_TENDENCY_RECENT_COLOR}"></span>`
+    + `Last 100</span>`
+    + `<span class="swing-gauge__legend-item">`
+    + `<span class="swing-gauge__dot" style="background:${SWING_TENDENCY_VISIBLE_COLOR}"></span>`
+    + `Last 25</span>`
+    + '</div>';
+
+  return wrapper;
+}
+
+function createChaseTendencyCard(pitchRows) {
+  const card = createChartCard(
+    'Chase Tendency',
+    'Average pitch distance from the previous swing.',
+  );
+  card.classList.add('chart-card--table', 'swing-gauge-panel__card');
+
+  const gaugeData = buildSwingTendencyGaugeData(pitchRows);
+  if (gaugeData) {
+    card.append(createChaseTendencyGauge(
+      gaugeData.allTime,
+      gaugeData.recent,
+      gaugeData.visible,
+    ));
+  } else {
+    const empty = document.createElement('p');
+    empty.className = 'chart-caption';
+    empty.textContent = 'Not enough swing data for the chase tendency gauge.';
+    card.append(empty);
+  }
+
+  return card;
+}
+
+function renderAttackZonePanel(pitcherAnalytics) {
+  if (!attackZonePanelEl) {
+    return;
+  }
+
+  if (!pitcherAnalytics?.allPitchRows?.length) {
+    attackZonePanelEl.hidden = true;
+    attackZonePanelEl.replaceChildren();
+    attackZonePanelEl.classList.remove('attack-zone-panel--pitcher-only');
+    return;
+  }
+
+  const attackZone = pitcherAnalytics.attackZone;
+  const pitcherMode = isPitcherMode();
+
+  if (!pitcherMode && !attackZone) {
+    attackZonePanelEl.hidden = true;
+    attackZonePanelEl.replaceChildren();
+    attackZonePanelEl.classList.remove('attack-zone-panel--pitcher-only');
+    return;
+  }
+
+  attackZonePanelEl.replaceChildren();
+  attackZonePanelEl.classList.toggle('attack-zone-panel--pitcher-only', pitcherMode);
+
+  if (!pitcherMode && attackZone) {
+    attackZonePanelEl.append(createAttackZoneCard(attackZone));
+  }
+
+  const chaseCard = createChaseTendencyCard(pitcherAnalytics.allPitchRows);
+  if (pitcherMode) {
+    chaseCard.classList.add('attack-zone-panel__chase-only');
+  }
+  attackZonePanelEl.append(chaseCard);
   attackZonePanelEl.hidden = false;
 }
 
