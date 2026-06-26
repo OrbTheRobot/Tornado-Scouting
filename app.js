@@ -597,28 +597,37 @@ async function exportPageAsPng() {
     window.scrollTo(0, 0);
 
     const horizontalMargin = 12;
-    const contentWidth = Math.ceil(pageRootEl.clientWidth);
-    const captureWidth = contentWidth + horizontalMargin * 2;
-    const captureHeight = Math.ceil(pageRootEl.scrollHeight);
+    const originalCssText = pageRootEl.style.cssText;
 
-    const dataUrl = await toPng(pageRootEl, {
-      cacheBust: true,
-      pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
-      backgroundColor: '#100c16',
-      width: captureWidth,
-      height: captureHeight,
-      style: {
-        boxSizing: 'content-box',
-        width: `${contentWidth}px`,
-        minWidth: '0',
-        maxWidth: 'none',
-        marginLeft: '0',
-        marginRight: '0',
-        paddingLeft: `${horizontalMargin}px`,
-        paddingRight: `${horizontalMargin}px`,
-      },
-      filter: (node) => node !== exportPageBtn,
-    });
+    // Pin the live page to a deterministic box so the capture has equal
+    // left/right margins regardless of window width or overlay overflow.
+    const contentWidth = Math.ceil(pageRootEl.clientWidth);
+    pageRootEl.style.boxSizing = 'content-box';
+    pageRootEl.style.width = `${contentWidth}px`;
+    pageRootEl.style.minWidth = '0';
+    pageRootEl.style.maxWidth = 'none';
+    pageRootEl.style.marginLeft = '0';
+    pageRootEl.style.marginRight = '0';
+    pageRootEl.style.paddingLeft = `${horizontalMargin}px`;
+    pageRootEl.style.paddingRight = `${horizontalMargin}px`;
+
+    // Force reflow, then capture using the element's real dimensions.
+    const captureWidth = pageRootEl.offsetWidth;
+    const captureHeight = pageRootEl.scrollHeight;
+
+    let dataUrl;
+    try {
+      dataUrl = await toPng(pageRootEl, {
+        cacheBust: true,
+        pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+        backgroundColor: '#100c16',
+        width: captureWidth,
+        height: captureHeight,
+        filter: (node) => node !== exportPageBtn,
+      });
+    } finally {
+      pageRootEl.style.cssText = originalCssText;
+    }
 
     window.scrollTo(scrollX, scrollY);
 
