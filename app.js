@@ -597,7 +597,7 @@ async function exportPageAsPng() {
     window.scrollTo(0, 0);
 
     const horizontalMargin = 12;
-    const contentWidth = Math.ceil(pageRootEl.scrollWidth);
+    const contentWidth = Math.ceil(pageRootEl.clientWidth);
     const captureWidth = contentWidth + horizontalMargin * 2;
     const captureHeight = Math.ceil(pageRootEl.scrollHeight);
 
