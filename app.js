@@ -66,6 +66,8 @@ const SWING_TENDENCY_VISIBLE_PITCH_COUNT = SPIRAL_VISIBLE_PITCH_COUNT;
 const SWING_TENDENCY_ALLTIME_COLOR = PITCH_DENSITY_LINE_COLOR;
 const SWING_TENDENCY_RECENT_COLOR = PITCH_DENSITY_RECENT_LINE_COLOR;
 const SWING_TENDENCY_VISIBLE_COLOR = 'rgba(255, 209, 71, 0.85)';
+const CHASE_TENDENCY_DIVISOR = 125;
+const CHASE_TENDENCY_OFFSET = 250;
 const PITCH_VALUE_BUCKET_SIZE = 100;
 const DELTA_BUCKET_SIZE = 50;
 const BATTER_BUCKET_RECENT_PITCH_COUNT = 100;
@@ -89,7 +91,7 @@ const SITUATION_DELTA_BAND_OUTER_RADIUS = SITUATION_DELTA_BAND_INNER_RADIUS + DE
 const SITUATION_DELTA_BAND_MID_RADIUS = (
   SITUATION_DELTA_BAND_INNER_RADIUS + SITUATION_DELTA_BAND_OUTER_RADIUS
 ) / 2;
-const SITUATION_DELTA_BAND_COLOR = '#e0b341';
+const SITUATION_DELTA_BAND_COLOR = '#c7a8ff';
 const RANGE_BAND_GAP = 0.012;
 const RANGE_MARKER_INNER_RADIUS = SITUATION_DELTA_BAND_OUTER_RADIUS + RANGE_BAND_GAP;
 const RANGE_MARKER_OUTER_RADIUS = RANGE_MARKER_INNER_RADIUS + DELTA_BAND_THICKNESS;
@@ -594,23 +596,26 @@ async function exportPageAsPng() {
 
     window.scrollTo(0, 0);
 
-    const horizontalPadding = 16;
-    const contentWidth = pageRootEl.scrollWidth;
-    const captureWidth = contentWidth + horizontalPadding * 2;
+    const horizontalMargin = 12;
+    const contentWidth = Math.ceil(pageRootEl.scrollWidth);
+    const captureWidth = contentWidth + horizontalMargin * 2;
+    const captureHeight = Math.ceil(pageRootEl.scrollHeight);
 
     const dataUrl = await toPng(pageRootEl, {
       cacheBust: true,
       pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
       backgroundColor: '#100c16',
       width: captureWidth,
-      height: pageRootEl.scrollHeight,
+      height: captureHeight,
       style: {
-        boxSizing: 'border-box',
-        width: `${captureWidth}px`,
-        paddingLeft: `${horizontalPadding}px`,
-        paddingRight: `${horizontalPadding}px`,
+        boxSizing: 'content-box',
+        width: `${contentWidth}px`,
+        minWidth: '0',
+        maxWidth: 'none',
         marginLeft: '0',
         marginRight: '0',
+        paddingLeft: `${horizontalMargin}px`,
+        paddingRight: `${horizontalMargin}px`,
       },
       filter: (node) => node !== exportPageBtn,
     });
@@ -1392,7 +1397,7 @@ function buildSwingTendencyGaugeData(pitchRows) {
     }
 
     const travel = getPitchTravelDelta(previousSwing, chronological[index].pitchNumber);
-    samples.push((travel - 250) / 250);
+    samples.push((travel - CHASE_TENDENCY_OFFSET) / CHASE_TENDENCY_DIVISOR);
   }
 
   if (samples.length === 0) {
